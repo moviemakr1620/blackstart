@@ -1,0 +1,22 @@
+[Unit]
+Description=Blackstart power orchestrator
+Documentation=file:/opt/blackstart/deploy/lxc.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=blackstart
+Group=blackstart
+WorkingDirectory=/opt/blackstart/backend
+Environment=PYTHONPATH=/opt/blackstart/backend
+Environment=BLACKSTART_DATA_DIR=/var/lib/blackstart
+EnvironmentFile=-/etc/blackstart.env
+ExecStart=/opt/blackstart/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8088
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+# The LXC is the brain — if this dies during an outage, nothing else comes back.
+[Install]
+WantedBy=multi-user.target

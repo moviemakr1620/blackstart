@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(92, 225, 197, 0.08), transparent 50%),
+    radial-gradient(900px 500px at 110% 0%, rgba(108, 182, 255, 0.06), transparent 45%),
+    #07090d;
+  font-feature-settings: "ss01" on;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #243040 transparent;
+}
+
+input,
+select,
+textarea {
+  @apply bg-ink-900 border border-ink-600 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none focus:border-mint/70 focus:ring-1 focus:ring-mint/40;
+}
+
+label {
+  @apply text-[11px] uppercase tracking-[0.16em] text-slate-500 font-medium;
+}
+
+.card {
+  @apply bg-ink-800/80 border border-white/5 rounded-2xl;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition disabled:opacity-40 disabled:pointer-events-none;
+}
+
+.btn-primary {
+  @apply btn bg-mint text-ink-950 hover:bg-mint/90;
+}
+
+.btn-ghost {
+  @apply btn bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10;
+}
+
+.btn-danger {
+  @apply btn bg-rose/15 text-rose hover:bg-rose/25 border border-rose/30;
+}
+
+.btn-warn {
+  @apply btn bg-amber/15 text-amber hover:bg-amber/25 border border-amber/30;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}

@@ -1,0 +1,25 @@
+services:
+  blackstart:
+    build: .
+    container_name: blackstart
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      BLACKSTART_SECRET_KEY: ${BLACKSTART_SECRET_KEY:-change-me-to-a-long-random-string}
+      BLACKSTART_ADMIN_USER: ${BLACKSTART_ADMIN_USER:-admin}
+      BLACKSTART_ADMIN_PASSWORD: ${BLACKSTART_ADMIN_PASSWORD:-blackstart}
+      BLACKSTART_DATA_DIR: /data
+      BLACKSTART_PEANUT_URL: ${BLACKSTART_PEANUT_URL:-}
+      BLACKSTART_NUT_HOST: ${BLACKSTART_NUT_HOST:-}
+      BLACKSTART_NUT_DEVICE: ${BLACKSTART_NUT_DEVICE:-ecoflow}
+    volumes:
+      - blackstart-data:/data
+      # Uncomment if this container should drive Docker on the same host:
+      # - /var/run/docker.sock:/var/run/docker.sock
+    # If peanut/NUT live on the Proxmox host network, host mode is the
+    # least surprising way to reach them (and Wake-on-LAN).
+    # network_mode: host
+
+volumes:
+  blackstart-data:
