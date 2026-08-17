@@ -16,6 +16,17 @@ if [[ ! -f "$APP_DIR/backend/app/main.py" ]]; then
   exit 1
 fi
 
+as_blackstart() {
+  # Debian CT images do not include sudo. runuser is from util-linux.
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u blackstart -- "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u blackstart -- "$@"
+  else
+    su -s /bin/bash blackstart -c "$(printf '%q ' "$@")"
+  fi
+}
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
@@ -26,11 +37,11 @@ mkdir -p "$DATA_DIR"
 chown -R blackstart:blackstart "$DATA_DIR"
 chown -R blackstart:blackstart "$APP_DIR"
 
-if [[ ! -d "$APP_DIR/backend/.venv" ]]; then
-  sudo -u blackstart python3 -m venv "$APP_DIR/backend/.venv"
+if [[ ! -x "$APP_DIR/backend/.venv/bin/python" ]]; then
+  as_blackstart python3 -m venv "$APP_DIR/backend/.venv"
 fi
-sudo -u blackstart "$APP_DIR/backend/.venv/bin/pip" install --upgrade pip
-sudo -u blackstart "$APP_DIR/backend/.venv/bin/pip" install -r "$APP_DIR/backend/requirements.txt"
+as_blackstart "$APP_DIR/backend/.venv/bin/pip" install --upgrade pip
+as_blackstart "$APP_DIR/backend/.venv/bin/pip" install -r "$APP_DIR/backend/requirements.txt"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
@@ -46,6 +57,8 @@ systemctl enable --now blackstart.service
 
 sleep 1
 systemctl --no-pager --full status blackstart.service || true
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
-echo "Blackstart is listening on http://$(hostname -I | awk '{print $1}'):8088"
+echo "Blackstart should be on http://${IP:-<lxc-ip>}:8088"
 echo "Login: admin / blackstart   — change the password immediately."
+echo "Check:  systemctl status blackstart   and   curl -sS http://127.0.0.1:8088/api/health"
