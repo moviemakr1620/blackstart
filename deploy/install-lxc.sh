@@ -36,6 +36,9 @@ id -u blackstart >/dev/null 2>&1 || useradd --system --home "$DATA_DIR" --shell 
 mkdir -p "$DATA_DIR"
 chown -R blackstart:blackstart "$DATA_DIR"
 chown -R blackstart:blackstart "$APP_DIR"
+# Root updates the tree with `git pull`; mark it safe so Git 2.35+ does not
+# refuse a repo owned by the blackstart service user.
+git config --global --add safe.directory "$APP_DIR"
 
 if [[ ! -x "$APP_DIR/backend/.venv/bin/python" ]]; then
   as_blackstart python3 -m venv "$APP_DIR/backend/.venv"

@@ -159,6 +159,7 @@ Useful commands:
 systemctl status blackstart
 journalctl -u blackstart -f
 # after a git pull:
+git config --global --add safe.directory /opt/blackstart
 cd /opt/blackstart && git pull
 runuser -u blackstart -- /opt/blackstart/backend/.venv/bin/pip install -r backend/requirements.txt
 systemctl restart blackstart
