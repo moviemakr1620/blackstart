@@ -96,7 +96,7 @@ export function Dashboard() {
           </h1>
         </div>
         <div className="flex items-center gap-2">
-          <ModePill mode={mode} connected={ups.connected !== false} />
+          <ModePill mode={mode} connected={Boolean(ups.connected) && !ups.error} />
           {settings && !settings.live_actions && (
             <span className="text-xs px-2 py-1 rounded-full bg-amber/15 text-amber border border-amber/30">
               Dry-run mode — actions will not touch hosts
@@ -117,7 +117,15 @@ export function Dashboard() {
       </header>
 
       {ups.error && (
-        <div className="card px-4 py-3 text-sm text-rose border-rose/30">UPS source error: {ups.error}</div>
+        <div className="card px-4 py-3 text-sm text-rose border-rose/30 space-y-1">
+          <div>UPS source error: {ups.error}</div>
+          {(ups.error.includes("401") || ups.error.toLowerCase().includes("unauthorized")) && (
+            <div className="text-slate-300">
+              PeaNUT&apos;s dashboard can be logged in while the API still rejects Blackstart. Edit the PeaNUT source
+              in Settings and save the same username/password you use to sign into PeaNUT, then click Test.
+            </div>
+          )}
+        </div>
       )}
 
       <div className="grid xl:grid-cols-[280px_1fr_320px] gap-5">

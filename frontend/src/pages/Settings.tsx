@@ -2,23 +2,27 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AppSettings, UpsSource } from "../types";
 
+const emptySrc = {
+  name: "PeaNUT",
+  kind: "peanut" as UpsSource["kind"],
+  base_url: "http://10.8.2.50:8080",
+  host: "10.8.2.50",
+  port: 3493,
+  device_name: "",
+  username: "",
+  password: "",
+  poll_interval_sec: 5,
+  enabled: true,
+};
+
 export function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [sources, setSources] = useState<UpsSource[]>([]);
   const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
-  const [src, setSrc] = useState({
-    name: "PeaNUT",
-    kind: "peanut" as UpsSource["kind"],
-    base_url: "http://192.168.1.50:8080",
-    host: "192.168.1.50",
-    port: 3493,
-    device_name: "ecoflow",
-    username: "",
-    password: "",
-    poll_interval_sec: 5,
-    enabled: true,
-  });
+  const [src, setSrc] = useState(emptySrc);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   async function load() {
     const [s, u] = await Promise.all([
@@ -30,33 +34,84 @@ export function Settings() {
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load().catch((e) => setErr(e instanceof Error ? e.message : "Failed to load"));
   }, []);
 
   async function saveSettings(patch: Partial<AppSettings>) {
     if (!settings) return;
-    const next = await api.put<AppSettings>("/api/settings", { ...settings, ...patch });
-    setSettings(next);
-    setMsg("Settings saved.");
+    try {
+      const next = await api.put<AppSettings>("/api/settings", { ...settings, ...patch });
+      setSettings(next);
+      setMsg("Settings saved.");
+      setErr("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    }
   }
 
-  async function addSource() {
-    await api.post("/api/ups/sources", src);
-    setMsg("UPS source saved. Disable the simulator and enable this one to go live.");
-    await load();
+  function editSource(s: UpsSource) {
+    setEditingId(s.id);
+    setSrc({
+      name: s.name,
+      kind: s.kind,
+      base_url: s.base_url || "",
+      host: s.host || "",
+      port: s.port || (s.kind === "peanut" ? 8080 : 3493),
+      device_name: s.device_name || "",
+      username: s.username || "",
+      password: "",
+      poll_interval_sec: s.poll_interval_sec || 5,
+      enabled: s.enabled,
+    });
+    setMsg(`Editing “${s.name}”. Leave password blank to keep the current one.`);
+    setErr("");
+  }
+
+  function resetForm() {
+    setEditingId(null);
+    setSrc(emptySrc);
+  }
+
+  async function saveSource() {
+    setErr("");
+    try {
+      if (editingId) {
+        await api.put(`/api/ups/sources/${editingId}`, src);
+        setMsg("UPS source updated.");
+      } else {
+        await api.post("/api/ups/sources", src);
+        setMsg("UPS source saved.");
+      }
+      resetForm();
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not save UPS source");
+    }
   }
 
   async function enableSource(s: UpsSource) {
-    await api.put(`/api/ups/sources/${s.id}`, { ...s, enabled: true, password: "" });
-    await load();
+    setErr("");
+    try {
+      await api.put(`/api/ups/sources/${s.id}`, { ...s, enabled: true, password: "" });
+      setMsg(`Now using ${s.name}.`);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not enable source");
+    }
   }
 
   async function testSource(id: number) {
+    setErr("");
     try {
-      const res = await api.post<{ snapshot: { charge?: number; status?: string } }>(`/api/ups/sources/${id}/test`);
-      setMsg(`OK — ${res.snapshot.status} ${res.snapshot.charge ?? ""}%`);
+      const res = await api.post<{ snapshot: { charge?: number; status?: string; device?: string; model?: string } }>(
+        `/api/ups/sources/${id}/test`,
+      );
+      const snap = res.snapshot;
+      setMsg(
+        `OK — ${snap.model || snap.device || ""} ${snap.status || ""} ${snap.charge != null ? `${Math.round(snap.charge)}%` : ""}`.trim(),
+      );
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Test failed");
+      setErr(e instanceof Error ? e.message : "Test failed");
     }
   }
 
@@ -69,6 +124,7 @@ export function Settings() {
         <h1 className="text-2xl font-semibold">Settings</h1>
       </header>
       {msg && <div className="text-sm text-mint">{msg}</div>}
+      {err && <div className="text-sm text-rose">{err}</div>}
 
       <section className="card p-5 space-y-4">
         <h2 className="font-medium">Safety</h2>
@@ -174,8 +230,9 @@ export function Settings() {
       <section className="card p-5 space-y-4">
         <h2 className="font-medium">UPS sources</h2>
         <p className="text-sm text-slate-500">
-          PeaNUT is already talking to the EcoFlow over USB HID / NUT. Point Blackstart at PeaNUT&apos;s HTTP API, or
-          skip it and talk to upsd on port 3493. Only one source is enabled at a time.
+          PeaNUT&apos;s web UI can show the EcoFlow while its <em>API</em> still requires the PeaNUT login. Save that
+          username and password here. Device name can be left blank — Blackstart will pick the first UPS PeaNUT reports.
+          Only one source is enabled at a time.
         </p>
         <div className="space-y-2">
           {sources.map((s) => (
@@ -184,12 +241,20 @@ export function Settings() {
                 <div className="text-sm">
                   {s.name} <span className="text-slate-500">({s.kind})</span>
                   {s.enabled && <span className="text-mint text-xs ml-2">active</span>}
+                  {s.username && <span className="text-slate-500 text-xs ml-2">user {s.username}</span>}
+                  {s.has_password && <span className="text-slate-500 text-xs ml-1">· password set</span>}
+                  {!s.username && s.kind === "peanut" && (
+                    <span className="text-rose text-xs ml-2">no API login</span>
+                  )}
                 </div>
                 <div className="text-[11px] text-slate-500 mono">
-                  {s.base_url || `${s.host}:${s.port}`} · {s.device_name}
+                  {s.base_url || `${s.host}:${s.port}`} · {s.device_name || "(auto)"}
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-ghost" onClick={() => editSource(s)}>
+                  Edit
+                </button>
                 <button className="btn-ghost" onClick={() => testSource(s.id)}>
                   Test
                 </button>
@@ -201,8 +266,13 @@ export function Settings() {
                 <button
                   className="btn-danger"
                   onClick={async () => {
-                    await api.del(`/api/ups/sources/${s.id}`);
-                    await load();
+                    try {
+                      await api.del(`/api/ups/sources/${s.id}`);
+                      if (editingId === s.id) resetForm();
+                      await load();
+                    } catch (e) {
+                      setErr(e instanceof Error ? e.message : "Delete failed");
+                    }
                   }}
                 >
                   Delete
@@ -211,6 +281,7 @@ export function Settings() {
             </div>
           ))}
         </div>
+        <div className="text-sm text-slate-300">{editingId ? `Editing source #${editingId}` : "Add a new source"}</div>
         <div className="grid md:grid-cols-3 gap-3">
           <div className="space-y-1">
             <label>Name</label>
@@ -225,8 +296,8 @@ export function Settings() {
             </select>
           </div>
           <div className="space-y-1">
-            <label>Device name</label>
-            <input className="w-full" value={src.device_name} onChange={(e) => setSrc({ ...src, device_name: e.target.value })} />
+            <label>Device name (blank = auto)</label>
+            <input className="w-full" value={src.device_name} onChange={(e) => setSrc({ ...src, device_name: e.target.value })} placeholder="leave blank to auto-detect" />
           </div>
           <div className="space-y-1 md:col-span-2">
             <label>PeaNUT URL or NUT host</label>
@@ -243,17 +314,28 @@ export function Settings() {
             <input className="w-full" type="number" value={src.port} onChange={(e) => setSrc({ ...src, port: Number(e.target.value) })} />
           </div>
           <div className="space-y-1">
-            <label>Username</label>
-            <input className="w-full" value={src.username} onChange={(e) => setSrc({ ...src, username: e.target.value })} />
+            <label>PeaNUT / NUT username</label>
+            <input className="w-full" value={src.username} onChange={(e) => setSrc({ ...src, username: e.target.value })} autoComplete="off" />
           </div>
           <div className="space-y-1">
-            <label>Password</label>
-            <input className="w-full" type="password" value={src.password} onChange={(e) => setSrc({ ...src, password: e.target.value })} />
+            <label>Password {editingId ? "(blank = keep)" : ""}</label>
+            <input className="w-full" type="password" value={src.password} onChange={(e) => setSrc({ ...src, password: e.target.value })} autoComplete="new-password" />
           </div>
+          <label className="flex items-center gap-2 text-sm normal-case tracking-normal mt-6">
+            <input type="checkbox" checked={src.enabled} onChange={(e) => setSrc({ ...src, enabled: e.target.checked })} />
+            Enable this source
+          </label>
         </div>
-        <button className="btn-primary" onClick={addSource}>
-          Add UPS source
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-primary" onClick={saveSource}>
+            {editingId ? "Save changes" : "Add UPS source"}
+          </button>
+          {editingId && (
+            <button className="btn-ghost" onClick={resetForm}>
+              Cancel
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="card p-5 space-y-3">
@@ -275,8 +357,13 @@ export function Settings() {
         <button
           className="btn-ghost"
           onClick={async () => {
-            await api.post("/api/auth/password", pw);
-            setMsg("Password changed.");
+            try {
+              await api.post("/api/auth/password", pw);
+              setMsg("Password changed.");
+              setErr("");
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : "Password change failed");
+            }
           }}
         >
           Update password

@@ -5,54 +5,98 @@ import type { Host, Target } from "../types";
 const HOST_KINDS = ["proxmox", "synology", "docker", "ssh"] as const;
 const TARGET_KINDS = ["vm", "lxc", "container", "stack", "nas", "host", "custom"];
 
+const emptyHost = {
+  name: "",
+  kind: "proxmox" as Host["kind"],
+  address: "",
+  port: 8006,
+  token_id: "",
+  token_secret: "",
+  username: "",
+  password: "",
+  private_key: "",
+};
+
+const emptyTarget = {
+  name: "",
+  kind: "vm",
+  host_id: 0,
+  external_id: "",
+  critical: false,
+  enabled: true,
+  notes: "",
+  mac: "",
+  node: "",
+};
+
 export function Inventory() {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [msg, setMsg] = useState("");
-  const [hostForm, setHostForm] = useState({
-    name: "",
-    kind: "proxmox" as Host["kind"],
-    address: "",
-    port: 8006,
-    token_id: "",
-    token_secret: "",
-    username: "",
-    password: "",
-    private_key: "",
-  });
-  const [targetForm, setTargetForm] = useState({
-    name: "",
-    kind: "vm",
-    host_id: 0,
-    external_id: "",
-    critical: false,
-    notes: "",
-    mac: "",
-    node: "",
-  });
+  const [err, setErr] = useState("");
+  const [hostForm, setHostForm] = useState(emptyHost);
+  const [targetForm, setTargetForm] = useState(emptyTarget);
+  const [editingHostId, setEditingHostId] = useState<number | null>(null);
+  const [editingTargetId, setEditingTargetId] = useState<number | null>(null);
 
   async function load() {
     const [h, t] = await Promise.all([api.get<Host[]>("/api/hosts"), api.get<Target[]>("/api/targets")]);
     setHosts(h);
     setTargets(t);
-    if (!targetForm.host_id && h[0]) setTargetForm((f) => ({ ...f, host_id: h[0].id }));
+    setTargetForm((f) => (f.host_id || !h[0] ? f : { ...f, host_id: h[0].id }));
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load().catch((e) => setErr(e instanceof Error ? e.message : "Failed to load"));
   }, []);
 
-  async function addHost() {
+  function editHost(h: Host) {
+    setEditingHostId(h.id);
+    setHostForm({
+      name: h.name,
+      kind: h.kind,
+      address: h.address,
+      port: h.port,
+      token_id: "",
+      token_secret: "",
+      username: "",
+      password: "",
+      private_key: "",
+    });
+    setMsg(`Editing host “${h.name}”. Leave secrets blank to keep the current ones.`);
+    setErr("");
+  }
+
+  function editTarget(t: Target) {
+    const extra = t.extra || {};
+    setEditingTargetId(t.id);
+    setTargetForm({
+      name: t.name,
+      kind: t.kind,
+      host_id: t.host_id || 0,
+      external_id: t.external_id,
+      critical: t.critical,
+      enabled: t.enabled,
+      notes: t.notes || "",
+      mac: typeof extra.mac === "string" ? extra.mac : "",
+      node: typeof extra.node === "string" ? extra.node : "",
+    });
+    setMsg(`Editing target “${t.name}”.`);
+    setErr("");
+  }
+
+  async function saveHost() {
+    setErr("");
     const creds: Record<string, string> = {};
     if (hostForm.kind === "proxmox") {
-      creds.token_id = hostForm.token_id;
-      creds.token_secret = hostForm.token_secret;
+      if (hostForm.token_id) creds.token_id = hostForm.token_id;
+      if (hostForm.token_secret) creds.token_secret = hostForm.token_secret;
     } else {
-      creds.username = hostForm.username;
-      creds.password = hostForm.password;
+      if (hostForm.username) creds.username = hostForm.username;
+      if (hostForm.password) creds.password = hostForm.password;
       if (hostForm.private_key) creds.private_key = hostForm.private_key;
     }
-    await api.post("/api/hosts", {
+    const body = {
       name: hostForm.name,
       kind: hostForm.kind,
       enabled: true,
@@ -61,62 +105,92 @@ export function Inventory() {
       verify_tls: false,
       credentials: creds,
       extra: hostForm.kind === "docker" && hostForm.address.startsWith("unix") ? { socket: hostForm.address } : {},
-    });
-    setMsg("Host saved.");
-    await load();
-  }
-
-  async function testHost(id: number) {
+    };
     try {
-      const res = await api.post<{ ok: boolean }>(`/api/hosts/${id}/test`);
-      setMsg(res.ok ? "Connection OK." : "Test failed.");
+      if (editingHostId) {
+        await api.put(`/api/hosts/${editingHostId}`, body);
+        setMsg("Host updated.");
+      } else {
+        await api.post("/api/hosts", body);
+        setMsg("Host saved.");
+      }
+      setEditingHostId(null);
+      setHostForm(emptyHost);
       await load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Test failed");
+      setErr(e instanceof Error ? e.message : "Could not save host");
     }
   }
 
-  async function discover(id: number) {
-    try {
-      await api.post(`/api/hosts/${id}/discover`);
-      setMsg("Discover complete — new targets imported.");
-      await load();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Discover failed");
-    }
-  }
-
-  async function addTarget() {
-    await api.post("/api/targets", {
+  async function saveTarget() {
+    setErr("");
+    const existing = editingTargetId ? targets.find((t) => t.id === editingTargetId) : null;
+    const extra = { ...(existing?.extra || {}), mac: targetForm.mac, node: targetForm.node };
+    const body = {
       name: targetForm.name,
       kind: targetForm.kind,
       host_id: targetForm.host_id || null,
       external_id: targetForm.external_id,
       critical: targetForm.critical,
-      enabled: true,
+      enabled: targetForm.enabled,
       notes: targetForm.notes,
-      extra: { mac: targetForm.mac, node: targetForm.node },
-    });
-    setMsg("Target saved.");
-    await load();
+      extra,
+    };
+    try {
+      if (editingTargetId) {
+        await api.put(`/api/targets/${editingTargetId}`, body);
+        setMsg("Target updated.");
+      } else {
+        await api.post("/api/targets", body);
+        setMsg("Target saved.");
+      }
+      setEditingTargetId(null);
+      setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not save target");
+    }
+  }
+
+  async function testHost(id: number) {
+    setErr("");
+    try {
+      const res = await api.post<{ ok: boolean }>(`/api/hosts/${id}/test`);
+      setMsg(res.ok ? "Connection OK." : "Test failed.");
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Test failed");
+    }
+  }
+
+  async function discover(id: number) {
+    setErr("");
+    try {
+      await api.post(`/api/hosts/${id}/discover`);
+      setMsg("Discover complete — new targets imported.");
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Discover failed");
+    }
   }
 
   async function toggleCritical(t: Target) {
-    await api.put(`/api/targets/${t.id}`, { ...t, extra: t.extra, critical: !t.critical });
-    await load();
-  }
-
-  async function removeTarget(id: number) {
-    await api.del(`/api/targets/${id}`);
-    await load();
+    setErr("");
+    try {
+      await api.put(`/api/targets/${t.id}`, { ...t, extra: t.extra, critical: !t.critical });
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Update failed");
+    }
   }
 
   async function act(id: number, action: string, dry = true) {
+    setErr("");
     try {
       const res = await api.post<{ result: unknown }>(`/api/targets/${id}/action?action_type=${action}&dry_run=${dry}`);
       setMsg(`${action}: ${JSON.stringify(res.result)}`);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Action failed");
+      setErr(e instanceof Error ? e.message : "Action failed");
     }
   }
 
@@ -131,9 +205,10 @@ export function Inventory() {
         </p>
       </header>
       {msg && <div className="text-sm text-mint">{msg}</div>}
+      {err && <div className="text-sm text-rose">{err}</div>}
 
       <section className="card p-5 space-y-4">
-        <h2 className="font-medium">Add host</h2>
+        <h2 className="font-medium">{editingHostId ? `Edit host #${editingHostId}` : "Add host"}</h2>
         <div className="grid md:grid-cols-4 gap-3">
           <div className="space-y-1">
             <label>Name</label>
@@ -177,7 +252,7 @@ export function Inventory() {
         {hostForm.kind === "proxmox" ? (
           <div className="grid md:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label>API token id (user@pam!name)</label>
+              <label>API token id (user@pam!name){editingHostId ? " — blank keeps current" : ""}</label>
               <input className="w-full" value={hostForm.token_id} onChange={(e) => setHostForm({ ...hostForm, token_id: e.target.value })} />
             </div>
             <div className="space-y-1">
@@ -188,7 +263,7 @@ export function Inventory() {
         ) : (
           <div className="grid md:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label>Username</label>
+              <label>Username{editingHostId ? " — blank keeps current" : ""}</label>
               <input className="w-full" value={hostForm.username} onChange={(e) => setHostForm({ ...hostForm, username: e.target.value })} />
             </div>
             <div className="space-y-1">
@@ -203,9 +278,22 @@ export function Inventory() {
             )}
           </div>
         )}
-        <button className="btn-primary" onClick={addHost}>
-          Save host
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-primary" onClick={saveHost}>
+            {editingHostId ? "Save host changes" : "Save host"}
+          </button>
+          {editingHostId && (
+            <button
+              className="btn-ghost"
+              onClick={() => {
+                setEditingHostId(null);
+                setHostForm(emptyHost);
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -223,7 +311,10 @@ export function Inventory() {
               </span>
             </div>
             {h.last_error && <div className="text-xs text-rose break-all">{h.last_error}</div>}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-ghost" onClick={() => editHost(h)}>
+                Edit
+              </button>
               <button className="btn-ghost" onClick={() => testHost(h.id)}>
                 Test
               </button>
@@ -235,8 +326,16 @@ export function Inventory() {
               <button
                 className="btn-danger"
                 onClick={async () => {
-                  await api.del(`/api/hosts/${h.id}`);
-                  await load();
+                  try {
+                    await api.del(`/api/hosts/${h.id}`);
+                    if (editingHostId === h.id) {
+                      setEditingHostId(null);
+                      setHostForm(emptyHost);
+                    }
+                    await load();
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : "Delete failed");
+                  }
                 }}
               >
                 Delete
@@ -247,7 +346,7 @@ export function Inventory() {
       </section>
 
       <section className="card p-5 space-y-4">
-        <h2 className="font-medium">Add target</h2>
+        <h2 className="font-medium">{editingTargetId ? `Edit target #${editingTargetId}` : "Add target"}</h2>
         <div className="grid md:grid-cols-4 gap-3">
           <div className="space-y-1">
             <label>Name</label>
@@ -287,10 +386,27 @@ export function Inventory() {
             <input type="checkbox" checked={targetForm.critical} onChange={(e) => setTargetForm({ ...targetForm, critical: e.target.checked })} />
             Critical (never shed)
           </label>
+          <label className="flex items-center gap-2 text-sm normal-case tracking-normal mt-6">
+            <input type="checkbox" checked={targetForm.enabled} onChange={(e) => setTargetForm({ ...targetForm, enabled: e.target.checked })} />
+            Enabled
+          </label>
         </div>
-        <button className="btn-primary" onClick={addTarget}>
-          Save target
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-primary" onClick={saveTarget}>
+            {editingTargetId ? "Save target changes" : "Save target"}
+          </button>
+          {editingTargetId && (
+            <button
+              className="btn-ghost"
+              onClick={() => {
+                setEditingTargetId(null);
+                setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="card overflow-hidden">
@@ -321,6 +437,9 @@ export function Inventory() {
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap gap-1 justify-end">
+                    <button className="btn-ghost" onClick={() => editTarget(t)}>
+                      Edit
+                    </button>
                     <button className="btn-ghost" onClick={() => toggleCritical(t)}>
                       {t.critical ? "Unprotect" : "Protect"}
                     </button>
@@ -330,7 +449,21 @@ export function Inventory() {
                     <button className="btn-ghost" onClick={() => act(t.id, guessStart(t), true)}>
                       Dry start
                     </button>
-                    <button className="btn-danger" onClick={() => removeTarget(t.id)}>
+                    <button
+                      className="btn-danger"
+                      onClick={async () => {
+                        try {
+                          await api.del(`/api/targets/${t.id}`);
+                          if (editingTargetId === t.id) {
+                            setEditingTargetId(null);
+                            setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+                          }
+                          await load();
+                        } catch (e) {
+                          setErr(e instanceof Error ? e.message : "Delete failed");
+                        }
+                      }}
+                    >
                       Delete
                     </button>
                   </div>
