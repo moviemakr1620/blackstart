@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { getToken } from "./api";
+import { FeedbackProvider } from "./feedback";
 import { Layout } from "./layout";
 import { Dashboard } from "./pages/Dashboard";
 import { History } from "./pages/History";
@@ -21,7 +22,9 @@ export default function App() {
         path="/"
         element={
           <Private>
-            <Layout />
+            <FeedbackProvider>
+              <Layout />
+            </FeedbackProvider>
           </Private>
         }
       >

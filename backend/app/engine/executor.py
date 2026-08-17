@@ -58,6 +58,12 @@ def synology_from(host: Host) -> SynologyAdapter:
     )
 
 
+def uses_ssh_docker(host: Host) -> bool:
+    extra = _extra(host)
+    access = str(extra.get("access") or extra.get("method") or "").lower()
+    return access in {"ssh", "docker-ssh"}
+
+
 def docker_from(host: Host) -> DockerAdapter:
     extra = _extra(host)
     address = extra.get("socket") or extra.get("url") or host.address
@@ -67,6 +73,55 @@ def docker_from(host: Host) -> DockerAdapter:
         port = host.port or 2375
         address = f"http://{host.address}:{port}"
     return DockerAdapter(address=address)
+
+
+def _sh_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+async def docker_via_ssh(host: Host, command: str, timeout: float = 60) -> dict[str, Any]:
+    result = await ssh_from(host).run(command, timeout=timeout)
+    if result.get("exit_code") not in (0, None):
+        raise ActionError(f"SSH docker failed ({result.get('exit_code')}): {result.get('stderr') or result.get('stdout')}")
+    return result
+
+
+async def discover_docker_ssh(host: Host) -> list[dict[str, Any]]:
+    listing = await docker_via_ssh(
+        host,
+        "docker ps -a --format '{{.Names}}\t{{.State}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}'",
+    )
+    items: list[dict[str, Any]] = []
+    seen_stacks: set[str] = set()
+    for line in (listing.get("stdout") or "").splitlines():
+        parts = line.split("\t")
+        if not parts or not parts[0].strip():
+            continue
+        name = parts[0].strip()
+        state = parts[1].strip() if len(parts) > 1 else "unknown"
+        project = parts[2].strip() if len(parts) > 2 else ""
+        image = parts[3].strip() if len(parts) > 3 else ""
+        items.append(
+            {
+                "kind": "container",
+                "name": name,
+                "external_id": name,
+                "extra": {"image": image, "state": state, "stack": project, "access": "ssh"},
+                "last_status": state,
+            }
+        )
+        if project and project not in seen_stacks:
+            seen_stacks.add(project)
+            items.append(
+                {
+                    "kind": "stack",
+                    "name": f"stack:{project}",
+                    "external_id": project,
+                    "extra": {"stack": project, "access": "ssh"},
+                    "last_status": "unknown",
+                }
+            )
+    return items
 
 
 def ssh_from(host: Host) -> SshAdapter:
@@ -140,6 +195,8 @@ async def execute_action(
             topic=action.get("topic") or cfg.get("ntfy_topic") or "",
             token=action.get("token") or cfg.get("gotify_token") or "",
         )
+        if result.get("skipped"):
+            raise ActionError(result.get("reason") or "notification was skipped")
     elif atype == "wait":
         seconds = float(action.get("seconds") or 5)
         await asyncio.sleep(min(seconds, 3600))
@@ -198,18 +255,47 @@ async def execute_action(
             raise ActionError("Missing Proxmox node name")
         result = {"data": await proxmox_from(host).shutdown_node(str(node))}
     elif atype in {"docker_stop", "docker_start", "docker_restart"}:
-        if not host or not target:
-            raise ActionError("Docker action needs a host and target")
+        if not host:
+            raise ActionError("Docker action needs a host")
         verb = atype.split("_", 1)[1]
-        ident = target.external_id or target.name
-        result = {"data": await docker_from(host).container_action(ident, verb)}
+        ident = (
+            action.get("container")
+            or action.get("name")
+            or (target.external_id if target else "")
+            or (target.name if target else "")
+        )
+        if not ident:
+            raise ActionError("Set a container name or pick a container target")
+        if uses_ssh_docker(host):
+            result = await docker_via_ssh(host, f"docker {verb} {_sh_quote(str(ident))}")
+        else:
+            if not target and not ident:
+                raise ActionError("Docker action needs a host and target")
+            result = {"data": await docker_from(host).container_action(str(ident), verb)}
     elif atype in {"docker_stop_stack", "docker_start_stack"}:
-        if not host or not target:
-            raise ActionError("Stack action needs a host and target")
+        if not host:
+            raise ActionError("Stack action needs a host")
         verb = "stop" if "stop" in atype else "start"
-        project = target.external_id or _extra(target).get("stack") or target.name.removeprefix("stack:")
-        names = await docker_from(host).stack_action(str(project), verb)
-        result = {"containers": names}
+        project = (
+            action.get("stack")
+            or action.get("name")
+            or (target.external_id if target else "")
+            or ((target and _extra(target).get("stack")) or "")
+            or ((target.name if target else "").removeprefix("stack:"))
+        )
+        if not project:
+            raise ActionError("Set a compose project name or pick a stack target")
+        if uses_ssh_docker(host):
+            # Prefer compose project; fall back to labelled containers.
+            cmd = (
+                f"(docker compose -p {_sh_quote(str(project))} {verb} "
+                f"|| docker ps -aq --filter label=com.docker.compose.project={_sh_quote(str(project))} "
+                f"| xargs -r docker {verb})"
+            )
+            result = await docker_via_ssh(host, cmd)
+        else:
+            names = await docker_from(host).stack_action(str(project), verb)
+            result = {"containers": names}
     elif atype == "synology_shutdown":
         if not host:
             raise ActionError("Need a Synology host")
@@ -229,20 +315,15 @@ async def execute_action(
         if result.get("exit_code") not in (0, None) and not action.get("ignore_exit"):
             raise ActionError(f"SSH exit {result.get('exit_code')}: {result.get('stderr')}")
     elif atype == "webhook":
-        import httpx
-
         url = action.get("url")
         if not url:
-            raise ActionError("Webhook missing url")
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.request(
-                action.get("method") or "POST",
-                url,
-                json=action.get("body") or {"source": "blackstart", "message": action.get("message")},
-                headers=action.get("headers") or {},
-            )
-            resp.raise_for_status()
-            result = {"status": resp.status_code}
+            raise ActionError("Webhook missing url — use Settings → Notifications instead")
+        result = await send_notification(
+            kind="discord" if "discord" in url else "webhook",
+            url=url,
+            message=action.get("message") or "Blackstart event",
+            title=action.get("title") or "Blackstart",
+        )
     else:
         raise ActionError(f"Unknown action type: {atype}")
 

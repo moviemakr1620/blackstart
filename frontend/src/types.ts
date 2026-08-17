@@ -20,6 +20,7 @@ export type UpsStatus = {
   ts?: string;
   power_mode?: string;
   running_run_id?: number | null;
+  reported_keys?: string[];
 };
 
 export type UpsSource = {
@@ -88,6 +89,9 @@ export type Action = {
   seconds?: number;
   node?: string;
   port?: number;
+  container?: string;
+  stack?: string;
+  name?: string;
 };
 
 export type PolicyStep = {

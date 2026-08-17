@@ -71,8 +71,20 @@ async def create_policy(
                 continue_on_error=step.continue_on_error,
             )
         )
+    if body.enabled:
+        await _exclusive_enable(session, row)
     await session.commit()
     return policy_out(await _load(session, row.id))
+
+
+async def _exclusive_enable(session: AsyncSession, row: Policy) -> None:
+    others = (
+        (await session.execute(select(Policy).where(Policy.kind == row.kind, Policy.id != row.id)))
+        .scalars()
+        .all()
+    )
+    for other in others:
+        other.enabled = False
 
 
 @router.put("/{policy_id}", response_model=PolicyOut)
@@ -122,8 +134,44 @@ async def update_policy(
                     continue_on_error=step.continue_on_error,
                 )
             )
+    if body.enabled:
+        await _exclusive_enable(session, row)
     await session.commit()
     return policy_out(await _load(session, policy_id))
+
+
+@router.post("/{policy_id}/clone", response_model=PolicyOut)
+async def clone_policy(
+    policy_id: int,
+    _: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyOut:
+    src = await _load(session, policy_id)
+    copy = Policy(
+        name=f"{src.name} (copy)",
+        kind=src.kind,
+        description=src.description,
+        enabled=False,
+        priority=src.priority + 1,
+    )
+    session.add(copy)
+    await session.flush()
+    for step in src.steps:
+        session.add(
+            PolicyStep(
+                policy_id=copy.id,
+                order=step.order,
+                name=step.name,
+                enabled=step.enabled,
+                trigger_json=step.trigger_json,
+                action_json=step.action_json,
+                delay_before_sec=step.delay_before_sec,
+                timeout_sec=step.timeout_sec,
+                continue_on_error=step.continue_on_error,
+            )
+        )
+    await session.commit()
+    return policy_out(await _load(session, copy.id))
 
 
 @router.delete("/{policy_id}")

@@ -134,10 +134,28 @@ export function Dashboard() {
           <div className="text-center text-sm text-slate-400 -mt-2">{statusLabel(ups.status, onBattery)}</div>
           <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
             <Stat label="Runtime" value={formatRuntime(ups.runtime_sec)} />
-            <Stat label="Load" value={ups.watts != null ? `${Math.round(ups.watts)} W` : "—"} />
-            <Stat label="UPS load" value={ups.load_pct != null ? `${Math.round(ups.load_pct)}%` : "—"} />
-            <Stat label="Input" value={ups.input_voltage != null ? `${Math.round(ups.input_voltage)} V` : "—"} />
+            <Stat
+              label="Load"
+              value={ups.watts != null ? `${Math.round(ups.watts)} W` : "Not reported"}
+              hint={ups.watts == null ? "EcoFlow HID often omits watts" : undefined}
+            />
+            <Stat
+              label="UPS load"
+              value={ups.load_pct != null ? `${Math.round(ups.load_pct)}%` : "Not reported"}
+              hint={ups.load_pct == null ? "Not in the NUT feed from PeaNUT" : undefined}
+            />
+            <Stat
+              label="Input"
+              value={ups.input_voltage != null ? `${Math.round(ups.input_voltage)} V` : "Not reported"}
+              hint={ups.input_voltage == null ? "Often missing on EcoFlow HID" : undefined}
+            />
           </div>
+          {ups.reported_keys && ups.reported_keys.length > 0 && (
+            <details className="mt-3 text-[11px] text-slate-500">
+              <summary className="cursor-pointer">What PeaNUT actually sent</summary>
+              <div className="mono mt-2 break-all">{ups.reported_keys.join(", ")}</div>
+            </details>
+          )}
         </section>
 
         <section className="card p-5 min-h-[340px]">
@@ -163,7 +181,7 @@ export function Dashboard() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          {(ups.source_kind === "simulator" || !ups.source_kind) && (
+          {ups.source_kind === "simulator" || !ups.source_kind ? (
             <div className="mt-4 flex flex-wrap gap-2">
               <button className="btn-warn" disabled={!!busy} onClick={() => simulate("pull_plug")}>
                 Pull the plug
@@ -181,6 +199,11 @@ export function Dashboard() {
                 15%
               </button>
             </div>
+          ) : (
+            <p className="mt-4 text-xs text-slate-500">
+              Simulator (fake EcoFlow) is in Settings → UPS sources. Enable the “EcoFlow simulator” source to rehearse
+              shed/restore without pulling the real plug. Buttons appear here once that source is active.
+            </p>
           )}
         </section>
 
@@ -226,11 +249,12 @@ export function Dashboard() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-xl bg-ink-900/70 px-3 py-2">
       <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="text-base">{value}</div>
+      {hint && <div className="text-[10px] text-slate-500 mt-1">{hint}</div>}
     </div>
   );
 }

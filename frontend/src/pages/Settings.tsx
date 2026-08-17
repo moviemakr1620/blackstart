@@ -182,6 +182,10 @@ export function Settings() {
 
       <section className="card p-5 space-y-4">
         <h2 className="font-medium">Notifications</h2>
+        <p className="text-sm text-slate-500">
+          Playbook “Send notification” uses this channel. Discord wants a webhook URL from Server Settings →
+          Integrations → Webhooks. Blackstart sends Discord the format it expects (`content`), not a generic JSON blob.
+        </p>
         <div className="grid md:grid-cols-2 gap-3">
           <div className="space-y-1">
             <label>Kind</label>
@@ -190,17 +194,19 @@ export function Settings() {
               value={settings.notify_kind}
               onChange={(e) => saveSettings({ notify_kind: e.target.value })}
             >
-              <option value="none">none</option>
+              <option value="none">Off</option>
+              <option value="discord">Discord webhook</option>
               <option value="ntfy">ntfy</option>
-              <option value="gotify">gotify</option>
-              <option value="webhook">webhook</option>
+              <option value="gotify">Gotify</option>
+              <option value="webhook">Generic webhook</option>
             </select>
           </div>
           <div className="space-y-1">
-            <label>URL</label>
+            <label>{settings.notify_kind === "discord" ? "Discord webhook URL" : "URL"}</label>
             <input
               className="w-full"
               value={settings.notify_url}
+              placeholder="https://discord.com/api/webhooks/…"
               onChange={(e) => setSettings({ ...settings, notify_url: e.target.value })}
               onBlur={() => saveSettings({ notify_url: settings.notify_url })}
             />
@@ -225,6 +231,22 @@ export function Settings() {
             />
           </div>
         </div>
+        <button
+          className="btn-primary"
+          onClick={async () => {
+            try {
+              await api.post("/api/settings/test-notify", {
+                message: "Blackstart test: if you see this, Discord/notify is working.",
+              });
+              setMsg("Test notification sent. Check Discord.");
+              setErr("");
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : "Test notify failed");
+            }
+          }}
+        >
+          Send test notification
+        </button>
       </section>
 
       <section className="card p-5 space-y-4">

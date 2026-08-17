@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useFeedback } from "../feedback";
+import { HOST_KIND_HELP } from "../labels";
 import type { Host, Target } from "../types";
 
 const HOST_KINDS = ["proxmox", "synology", "docker", "ssh"] as const;
@@ -15,6 +17,7 @@ const emptyHost = {
   username: "",
   password: "",
   private_key: "",
+  access: "ssh",
 };
 
 const emptyTarget = {
@@ -30,6 +33,7 @@ const emptyTarget = {
 };
 
 export function Inventory() {
+  const fb = useFeedback();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [msg, setMsg] = useState("");
@@ -62,6 +66,7 @@ export function Inventory() {
       username: "",
       password: "",
       private_key: "",
+      access: String(h.extra?.access || (h.kind === "docker" ? "ssh" : "api")),
     });
     setMsg(`Editing host “${h.name}”. Leave secrets blank to keep the current ones.`);
     setErr("");
@@ -96,6 +101,12 @@ export function Inventory() {
       if (hostForm.password) creds.password = hostForm.password;
       if (hostForm.private_key) creds.private_key = hostForm.private_key;
     }
+    const existing = editingHostId ? hosts.find((h) => h.id === editingHostId) : undefined;
+    const extra: Record<string, unknown> = { ...(existing?.extra || {}) };
+    if (hostForm.kind === "docker") {
+      extra.access = hostForm.access;
+      if (hostForm.address.startsWith("unix")) extra.socket = hostForm.address;
+    }
     const body = {
       name: hostForm.name,
       kind: hostForm.kind,
@@ -104,7 +115,7 @@ export function Inventory() {
       port: Number(hostForm.port),
       verify_tls: false,
       credentials: creds,
-      extra: hostForm.kind === "docker" && hostForm.address.startsWith("unix") ? { socket: hostForm.address } : {},
+      extra,
     };
     try {
       if (editingHostId) {
@@ -188,9 +199,14 @@ export function Inventory() {
     setErr("");
     try {
       const res = await api.post<{ result: unknown }>(`/api/targets/${id}/action?action_type=${action}&dry_run=${dry}`);
-      setMsg(`${action}: ${JSON.stringify(res.result)}`);
+      const text = `${dry ? "Dry" : "Live"} ${action}`;
+      setMsg(text);
+      fb.showResult(text, res.result, true);
+      fb.toast(text);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Action failed");
+      const text = e instanceof Error ? e.message : "Action failed";
+      setErr(text);
+      fb.toast(text, "err");
     }
   }
 
@@ -199,9 +215,11 @@ export function Inventory() {
       <header>
         <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Hosts and workloads</div>
         <h1 className="text-2xl font-semibold">Inventory</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Point Blackstart at Proxmox, Synology, Docker, and SSH. Discover VMs, LXCs, and compose stacks, then mark
-          peanut / this app as critical so they never get shed.
+        <p className="text-sm text-slate-500 mt-1 max-w-3xl">
+          A <strong className="text-slate-300">host</strong> is a machine Blackstart logs into (Proxmox, the NAS, a
+          Docker box). A <strong className="text-slate-300">target</strong> is one thing on that machine — VM 204, the
+          plex container, the NAS itself. Kind is the API we speak. The host dropdown on a target is “which machine
+          does this live on?” Credentials live on the host, not the target.
         </p>
       </header>
       {msg && <div className="text-sm text-mint">{msg}</div>}
@@ -249,6 +267,28 @@ export function Inventory() {
             />
           </div>
         </div>
+        {HOST_KIND_HELP[hostForm.kind] && (
+          <p className="text-xs text-slate-500">{HOST_KIND_HELP[hostForm.kind]}</p>
+        )}
+        {hostForm.kind === "docker" && (
+          <div className="space-y-1">
+            <label>How to reach Docker</label>
+            <select
+              className="w-full max-w-md"
+              value={hostForm.access}
+              onChange={(e) =>
+                setHostForm({
+                  ...hostForm,
+                  access: e.target.value,
+                  port: e.target.value === "ssh" ? 22 : 2375,
+                })
+              }
+            >
+              <option value="ssh">SSH and run docker commands (recommended)</option>
+              <option value="api">Docker TCP socket / unix socket</option>
+            </select>
+          </div>
+        )}
         {hostForm.kind === "proxmox" ? (
           <div className="grid md:grid-cols-2 gap-3">
             <div className="space-y-1">

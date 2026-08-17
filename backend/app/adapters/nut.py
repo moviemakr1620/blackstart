@@ -172,15 +172,48 @@ def classify_status(raw: str) -> tuple[str, bool, bool]:
     return status, on_battery, charging
 
 
+def _lookup(flat: dict[str, Any], *keys: str) -> Any:
+    lower = {str(k).lower().replace("_", "."): v for k, v in flat.items()}
+    for key in keys:
+        if key in flat and flat[key] not in (None, ""):
+            return flat[key]
+        alt = key.lower().replace("_", ".")
+        if alt in lower and lower[alt] not in (None, ""):
+            return lower[alt]
+    return None
+
+
 def snapshot_from_vars(vars_: dict[str, Any]) -> dict[str, Any]:
     flat = flatten_peanut_or_nut(vars_)
-    raw_status = str(flat.get("ups.status") or flat.get("ups_status") or "")
+    raw_status = str(_lookup(flat, "ups.status", "ups_status") or "")
     status, on_battery, charging = classify_status(raw_status)
-    # EcoFlow / NUT aliases
-    charge = _num(flat.get("battery.charge"))
-    runtime = _num(flat.get("battery.runtime"))
-    load = _num(flat.get("ups.load"))
-    watts = _num(flat.get("ups.realpower")) or _num(flat.get("ups.power"))
+    charge = _num(_lookup(flat, "battery.charge"))
+    runtime = _num(_lookup(flat, "battery.runtime", "battery.runtime.low"))
+    load = _num(_lookup(flat, "ups.load", "output.load", "ups.load.percent"))
+    watts = _num(
+        _lookup(
+            flat,
+            "ups.realpower",
+            "output.realpower",
+            "ups.power",
+            "output.power",
+            "ups.realpower.nominal",
+        )
+    )
+    if watts is None and load is not None:
+        nominal = _num(_lookup(flat, "ups.realpower.nominal", "ups.power.nominal", "output.realpower.nominal"))
+        if nominal:
+            watts = load / 100.0 * nominal
+    input_voltage = _num(
+        _lookup(
+            flat,
+            "input.voltage",
+            "input.L1-N.voltage",
+            "input.L1.voltage",
+            "input.voltage.nominal",
+        )
+    )
+    # EcoFlow HID often omits load/input. Keep the keys so the UI can say "not reported".
     return {
         "status_raw": raw_status,
         "status": status,
@@ -190,11 +223,12 @@ def snapshot_from_vars(vars_: dict[str, Any]) -> dict[str, Any]:
         "runtime_sec": runtime,
         "load_pct": load,
         "watts": watts,
-        "input_voltage": _num(flat.get("input.voltage")),
-        "output_voltage": _num(flat.get("output.voltage")),
-        "battery_voltage": _num(flat.get("battery.voltage")),
-        "temperature": _num(flat.get("ups.temperature") or flat.get("battery.temperature")),
-        "model": str(flat.get("device.model") or flat.get("ups.model") or ""),
-        "device": str(flat.get("device.serial") or flat.get("ups.id") or ""),
+        "input_voltage": input_voltage,
+        "output_voltage": _num(_lookup(flat, "output.voltage", "output.L1-N.voltage")),
+        "battery_voltage": _num(_lookup(flat, "battery.voltage")),
+        "temperature": _num(_lookup(flat, "ups.temperature", "battery.temperature")),
+        "model": str(_lookup(flat, "device.model", "ups.model") or ""),
+        "device": str(_lookup(flat, "device.serial", "ups.id") or ""),
         "raw": flat,
+        "reported_keys": sorted(flat.keys()),
     }

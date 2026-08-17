@@ -1,39 +1,25 @@
-import { Plus, Play, Trash2 } from "lucide-react";
+import { Copy, Plus, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Policy, PolicyStep, Target } from "../types";
+import { useFeedback } from "../feedback";
+import { ACTIONS, actionLabel, TRIGGERS, triggerLabel } from "../labels";
+import type { Host, Policy, PolicyStep, Target } from "../types";
 
-const ACTION_TYPES = [
-  "notify",
-  "wait",
-  "wol",
-  "proxmox_shutdown",
-  "proxmox_stop",
-  "proxmox_start",
-  "proxmox_shutdown_node",
-  "docker_stop",
-  "docker_start",
-  "docker_stop_stack",
-  "docker_start_stack",
-  "synology_shutdown",
-  "synology_stop_container",
-  "synology_start_container",
-  "ssh",
-  "webhook",
-  "wait_tcp",
-  "restore_auto",
-];
+function triggerSelectValue(step: PolicyStep) {
+  if (step.trigger.all) return "online_and_battery";
+  return step.trigger.type || "on_battery";
+}
 
-const TRIGGER_TYPES = [
-  "on_battery",
-  "on_online",
-  "battery_lte",
-  "battery_gte",
-  "runtime_lte",
-  "load_gte",
-  "status_is",
-  "always",
-];
+function applyTriggerType(type: string, prev: PolicyStep["trigger"]): PolicyStep["trigger"] {
+  if (type === "online_and_battery") {
+    return {
+      all: [{ type: "on_online" }, { type: "battery_gte", value: prev.value ?? 50, require_online: true }],
+      hold_seconds: prev.hold_seconds ?? 60,
+      value: prev.value ?? 50,
+    };
+  }
+  return { ...prev, type, all: undefined };
+}
 
 const emptyStep = (order: number): PolicyStep => ({
   order,
@@ -47,8 +33,10 @@ const emptyStep = (order: number): PolicyStep => ({
 });
 
 export function Playbooks() {
+  const fb = useFeedback();
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
+  const [hosts, setHosts] = useState<Host[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
   const [tab, setTab] = useState<"shed" | "restore">("shed");
@@ -56,9 +44,14 @@ export function Playbooks() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    const [p, t] = await Promise.all([api.get<Policy[]>("/api/policies"), api.get<Target[]>("/api/targets")]);
+    const [p, t, h] = await Promise.all([
+      api.get<Policy[]>("/api/policies"),
+      api.get<Target[]>("/api/targets"),
+      api.get<Host[]>("/api/hosts"),
+    ]);
     setPolicies(p);
     setTargets(t);
+    setHosts(h);
     const first = p.find((x) => x.kind === tab) || p[0];
     if (first && (!activeId || !p.some((x) => x.id === activeId))) {
       setActiveId(first.id);
@@ -70,7 +63,7 @@ export function Playbooks() {
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load().catch((e) => fb.toast(e instanceof Error ? e.message : "Load failed", "err"));
   }, []);
 
   useEffect(() => {
@@ -78,6 +71,9 @@ export function Playbooks() {
     if (first) {
       setActiveId(first.id);
       setDraft(structuredClone(first));
+    } else {
+      setActiveId(null);
+      setDraft(null);
     }
   }, [tab]);
 
@@ -95,37 +91,73 @@ export function Playbooks() {
       const saved = await api.put<Policy>(`/api/policies/${draft.id}`, draft);
       setDraft(saved);
       await load();
-      setMsg("Saved.");
+      setMsg(saved.enabled ? "Saved. This is the active playbook for this tab." : "Saved (disabled).");
+      fb.toast("Playbook saved");
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Save failed");
+      const text = e instanceof Error ? e.message : "Save failed";
+      setMsg(text);
+      fb.toast(text, "err");
     } finally {
       setBusy(false);
     }
   }
 
   async function createPolicy() {
-    const created = await api.post<Policy>("/api/policies", {
-      name: tab === "shed" ? "New shed playbook" : "New restore playbook",
-      kind: tab,
-      description: "",
-      enabled: true,
-      priority: 100,
-      steps: [emptyStep(10)],
-    });
-    await load();
-    select(created);
+    try {
+      const created = await api.post<Policy>("/api/policies", {
+        name: tab === "shed" ? "New shed playbook" : "New restore playbook",
+        kind: tab,
+        description: "",
+        enabled: false,
+        priority: 100,
+        steps: [emptyStep(10)],
+      });
+      await load();
+      select(created);
+      fb.toast("Playbook created (disabled until you turn it on)");
+    } catch (e) {
+      fb.toast(e instanceof Error ? e.message : "Create failed", "err");
+    }
+  }
+
+  async function clonePolicy() {
+    if (!draft) return;
+    try {
+      const created = await api.post<Policy>(`/api/policies/${draft.id}/clone`, {});
+      await load();
+      select(created);
+      fb.toast("Cloned. The copy is disabled until you enable it.");
+    } catch (e) {
+      fb.toast(e instanceof Error ? e.message : "Clone failed", "err");
+    }
+  }
+
+  async function deletePolicy() {
+    if (!draft) return;
+    if (!confirm(`Delete playbook “${draft.name}”? This cannot be undone.`)) return;
+    try {
+      await api.del(`/api/policies/${draft.id}`);
+      setDraft(null);
+      setActiveId(null);
+      await load();
+      fb.toast("Playbook deleted");
+    } catch (e) {
+      fb.toast(e instanceof Error ? e.message : "Delete failed", "err");
+    }
   }
 
   async function run(dry: boolean) {
     if (!draft) return;
     setBusy(true);
     try {
-      const res = await api.post<{ run_id: number; status: string }>(`/api/policies/${draft.id}/run`, {
-        dry_run: dry,
-      });
-      setMsg(`Run #${res.run_id} ${res.status}. See History for the log.`);
+      const res = await api.post<{ run_id: number; status: string; dry_run: boolean }>(
+        `/api/policies/${draft.id}/run`,
+        { dry_run: dry },
+      );
+      fb.watchRun(res.run_id, `${dry ? "Dry run" : "Live run"} — ${draft.name}`);
+      fb.toast(dry ? "Dry run started" : "Live run started", dry ? "info" : "ok");
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Run failed");
+      fb.toast(e instanceof Error ? e.message : "Run failed", "err");
     } finally {
       setBusy(false);
     }
@@ -147,6 +179,8 @@ export function Playbooks() {
   }
 
   const list = policies.filter((p) => p.kind === tab);
+  const dockerish = (t: string | undefined) =>
+    ["docker_stop", "docker_start", "docker_stop_stack", "docker_start_stack"].includes(t || "");
 
   return (
     <div className="p-6 space-y-5">
@@ -154,13 +188,25 @@ export function Playbooks() {
         <div>
           <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">What happens, and when</div>
           <h1 className="text-2xl font-semibold">Playbooks</h1>
+          <p className="text-sm text-slate-500 mt-1 max-w-2xl">
+            Only one shed playbook and one restore playbook stay active. Enable the one you want; the others of that
+            type turn off. <strong className="text-slate-300">Dry run</strong> walks the steps and logs what would
+            happen. <strong className="text-slate-300">Run live</strong> actually calls Proxmox / Docker / Synology —
+            only if live actions are on in Settings.
+          </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="btn-ghost" onClick={() => run(true)} disabled={!draft || busy}>
             <Play size={14} /> Dry run
           </button>
           <button className="btn-warn" onClick={() => run(false)} disabled={!draft || busy}>
             <Play size={14} /> Run live
+          </button>
+          <button className="btn-ghost" onClick={clonePolicy} disabled={!draft || busy}>
+            <Copy size={14} /> Clone
+          </button>
+          <button className="btn-danger" onClick={deletePolicy} disabled={!draft || busy}>
+            <Trash2 size={14} /> Delete
           </button>
           <button className="btn-primary" onClick={save} disabled={!draft || busy}>
             Save playbook
@@ -188,10 +234,13 @@ export function Playbooks() {
               onClick={() => select(p)}
               className={`w-full text-left card p-4 ${activeId === p.id ? "ring-1 ring-mint/40" : ""}`}
             >
-              <div className="font-medium">{p.name}</div>
-              <div className="text-[11px] text-slate-500">
-                {p.steps.length} steps · {p.enabled ? "enabled" : "disabled"}
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium">{p.name}</div>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full ${p.enabled ? "bg-mint/15 text-mint" : "bg-white/5 text-slate-500"}`}>
+                  {p.enabled ? "ACTIVE" : "off"}
+                </span>
               </div>
+              <div className="text-[11px] text-slate-500">{p.steps.length} steps</div>
             </button>
           ))}
           <button className="btn-ghost w-full" onClick={createPolicy}>
@@ -230,249 +279,330 @@ export function Playbooks() {
                   checked={draft.enabled}
                   onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
                 />
-                Enabled — engine will evaluate this playbook
+                Active — the engine uses this playbook (turns off other {tab} playbooks)
               </label>
             </div>
 
             <Ladder steps={draft.steps} kind={draft.kind} />
 
-            {draft.steps.map((step, idx) => (
-              <article key={step.id ?? `new-${idx}`} className="card p-5 space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <span className="mono text-xs text-slate-500">#{(idx + 1) * 10}</span>
-                    <input
-                      className="font-medium bg-transparent border-0 focus:ring-0 px-0"
-                      value={step.name}
-                      onChange={(e) => updateStep(idx, { name: e.target.value })}
-                    />
+            {draft.steps.map((step, idx) => {
+              const tsel = triggerSelectValue(step);
+              const actionHelp = ACTIONS.find((a) => a.value === step.action.type)?.help;
+              const triggerHelp = TRIGGERS.find((t) => t.value === tsel)?.help;
+              return (
+                <article key={step.id ?? `new-${idx}`} className="card p-5 space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="mono text-xs text-slate-500">#{(idx + 1) * 10}</span>
+                      <input
+                        className="font-medium bg-transparent border-0 focus:ring-0 px-0"
+                        value={step.name}
+                        onChange={(e) => updateStep(idx, { name: e.target.value })}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="btn-ghost" onClick={() => move(idx, -1)}>
+                        Up
+                      </button>
+                      <button className="btn-ghost" onClick={() => move(idx, 1)}>
+                        Down
+                      </button>
+                      <button
+                        className="btn-danger"
+                        onClick={() => setDraft({ ...draft, steps: draft.steps.filter((_, i) => i !== idx) })}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button className="btn-ghost" onClick={() => move(idx, -1)}>
-                      Up
-                    </button>
-                    <button className="btn-ghost" onClick={() => move(idx, 1)}>
-                      Down
-                    </button>
-                    <button
-                      className="btn-danger"
-                      onClick={() => setDraft({ ...draft, steps: draft.steps.filter((_, i) => i !== idx) })}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
 
-                <div className="grid md:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label>When</label>
-                    <select
-                      className="w-full"
-                      value={step.trigger.type || (step.trigger.all ? "compound" : "on_battery")}
-                      onChange={(e) => {
-                        const type = e.target.value;
-                        if (type === "compound") {
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label>When</label>
+                      <select
+                        className="w-full"
+                        value={tsel}
+                        onChange={(e) => updateStep(idx, { trigger: applyTriggerType(e.target.value, step.trigger) })}
+                      >
+                        {TRIGGERS.map((t) => (
+                          <option key={t.value} value={t.value}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                      {triggerHelp && <p className="text-[11px] text-slate-500">{triggerHelp}</p>}
+                    </div>
+                    {(tsel === "battery_lte" || tsel === "battery_gte" || tsel === "load_gte" || tsel === "online_and_battery") && (
+                      <div className="space-y-1">
+                        <label>{tsel === "load_gte" ? "Load percent" : "Battery percent"}</label>
+                        <input
+                          className="w-full"
+                          type="number"
+                          value={
+                            tsel === "online_and_battery"
+                              ? (step.trigger.all?.find((c) => c.type === "battery_gte")?.value ?? step.trigger.value ?? 50)
+                              : (step.trigger.value ?? 0)
+                          }
+                          onChange={(e) => {
+                            const value = Number(e.target.value);
+                            if (tsel === "online_and_battery") {
+                              updateStep(idx, {
+                                trigger: {
+                                  ...step.trigger,
+                                  value,
+                                  all: [{ type: "on_online" }, { type: "battery_gte", value, require_online: true }],
+                                },
+                              });
+                            } else {
+                              updateStep(idx, { trigger: { ...step.trigger, value } });
+                            }
+                          }}
+                        />
+                      </div>
+                    )}
+                    {tsel === "runtime_lte" && (
+                      <div className="space-y-1">
+                        <label>Minutes remaining</label>
+                        <input
+                          className="w-full"
+                          type="number"
+                          value={step.trigger.minutes ?? 15}
+                          onChange={(e) =>
+                            updateStep(idx, { trigger: { ...step.trigger, minutes: Number(e.target.value) } })
+                          }
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      <label>Hold still for (seconds)</label>
+                      <input
+                        className="w-full"
+                        type="number"
+                        value={step.trigger.hold_seconds ?? 0}
+                        onChange={(e) =>
+                          updateStep(idx, { trigger: { ...step.trigger, hold_seconds: Number(e.target.value) } })
+                        }
+                      />
+                      <p className="text-[11px] text-slate-500">
+                        Condition must stay true this long so a 2-second flicker does not fire the step.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label>Do</label>
+                      <select
+                        className="w-full"
+                        value={step.action.type || "notify"}
+                        onChange={(e) => updateStep(idx, { action: { ...step.action, type: e.target.value } })}
+                      >
+                        {ACTIONS.map((t) => (
+                          <option key={t.value} value={t.value}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                      {actionHelp && <p className="text-[11px] text-slate-500">{actionHelp}</p>}
+                    </div>
+                    <div className="space-y-1">
+                      <label>Target from inventory</label>
+                      <select
+                        className="w-full"
+                        value={step.action.target_id ?? ""}
+                        onChange={(e) =>
                           updateStep(idx, {
-                            trigger: {
-                              all: [
-                                { type: "on_online" },
-                                { type: "battery_gte", value: 50, require_online: true },
-                              ],
-                              hold_seconds: step.trigger.hold_seconds ?? 60,
-                            },
-                          });
-                        } else {
-                          updateStep(idx, { trigger: { ...step.trigger, type, all: undefined } });
+                            action: { ...step.action, target_id: e.target.value ? Number(e.target.value) : null },
+                          })
                         }
-                      }}
-                    >
-                      {TRIGGER_TYPES.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                      <option value="compound">compound (all of…)</option>
-                    </select>
-                  </div>
-                  {(step.trigger.type === "battery_lte" ||
-                    step.trigger.type === "battery_gte" ||
-                    step.trigger.type === "load_gte") && (
+                      >
+                        <option value="">— none —</option>
+                        {targets.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} ({t.kind} on {t.host_name || "—"})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="space-y-1">
-                      <label>Threshold</label>
+                      <label>Delay before this step (seconds)</label>
                       <input
                         className="w-full"
                         type="number"
-                        value={step.trigger.value ?? 0}
-                        onChange={(e) =>
-                          updateStep(idx, { trigger: { ...step.trigger, value: Number(e.target.value) } })
-                        }
+                        value={step.delay_before_sec}
+                        onChange={(e) => updateStep(idx, { delay_before_sec: Number(e.target.value) })}
+                      />
+                      <p className="text-[11px] text-slate-500">Wait after the trigger, before doing the action.</p>
+                    </div>
+                  </div>
+
+                  {step.action.type === "notify" && (
+                    <div className="space-y-1">
+                      <label>Message (sent via Settings → Notifications)</label>
+                      <input
+                        className="w-full"
+                        value={step.action.message || ""}
+                        onChange={(e) => updateStep(idx, { action: { ...step.action, message: e.target.value } })}
+                        placeholder="Grid down. Shedding media stack."
                       />
                     </div>
                   )}
-                  {step.trigger.type === "runtime_lte" && (
+                  {step.action.type === "ssh" && (
+                    <div className="grid md:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label>Host to SSH into</label>
+                        <select
+                          className="w-full"
+                          value={step.action.host_id ?? ""}
+                          onChange={(e) =>
+                            updateStep(idx, {
+                              action: { ...step.action, host_id: e.target.value ? Number(e.target.value) : null },
+                            })
+                          }
+                        >
+                          <option value="">Use the target&apos;s host</option>
+                          {hosts.map((h) => (
+                            <option key={h.id} value={h.id}>
+                              {h.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label>Command</label>
+                        <input
+                          className="w-full"
+                          value={step.action.command || ""}
+                          onChange={(e) => updateStep(idx, { action: { ...step.action, command: e.target.value } })}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {dockerish(step.action.type) && (
+                    <div className="grid md:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label>
+                          {step.action.type?.includes("stack") ? "Compose stack / project name" : "Container name"}
+                        </label>
+                        <input
+                          className="w-full"
+                          placeholder={step.action.type?.includes("stack") ? "media" : "plex"}
+                          value={
+                            (step.action.type?.includes("stack") ? step.action.stack : step.action.container) ||
+                            step.action.name ||
+                            ""
+                          }
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (step.action.type?.includes("stack")) {
+                              updateStep(idx, { action: { ...step.action, stack: v, name: v } });
+                            } else {
+                              updateStep(idx, { action: { ...step.action, container: v, name: v } });
+                            }
+                          }}
+                        />
+                        <p className="text-[11px] text-slate-500">
+                          Optional if you already picked an inventory target. For remote Docker, set the host to SSH
+                          access in Inventory.
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <label>Docker / SSH host</label>
+                        <select
+                          className="w-full"
+                          value={step.action.host_id ?? ""}
+                          onChange={(e) =>
+                            updateStep(idx, {
+                              action: { ...step.action, host_id: e.target.value ? Number(e.target.value) : null },
+                            })
+                          }
+                        >
+                          <option value="">Use the target&apos;s host</option>
+                          {hosts
+                            .filter((h) => h.kind === "docker" || h.kind === "ssh")
+                            .map((h) => (
+                              <option key={h.id} value={h.id}>
+                                {h.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                  {step.action.type === "wol" && (
                     <div className="space-y-1">
-                      <label>Minutes remaining</label>
+                      <label>MAC (optional — otherwise uses the target MAC)</label>
+                      <input
+                        className="w-full"
+                        value={step.action.mac || ""}
+                        onChange={(e) => updateStep(idx, { action: { ...step.action, mac: e.target.value } })}
+                      />
+                    </div>
+                  )}
+                  {step.action.type === "wait" && (
+                    <div className="space-y-1">
+                      <label>Wait seconds</label>
                       <input
                         className="w-full"
                         type="number"
-                        value={step.trigger.minutes ?? 15}
-                        onChange={(e) =>
-                          updateStep(idx, { trigger: { ...step.trigger, minutes: Number(e.target.value) } })
-                        }
+                        value={step.action.seconds ?? 10}
+                        onChange={(e) => updateStep(idx, { action: { ...step.action, seconds: Number(e.target.value) } })}
                       />
                     </div>
                   )}
-                  <div className="space-y-1">
-                    <label>Hold seconds</label>
-                    <input
-                      className="w-full"
-                      type="number"
-                      value={step.trigger.hold_seconds ?? 0}
-                      onChange={(e) =>
-                        updateStep(idx, { trigger: { ...step.trigger, hold_seconds: Number(e.target.value) } })
-                      }
-                    />
-                  </div>
-                </div>
+                  {step.action.type === "wait_tcp" && (
+                    <div className="grid md:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label>TCP port to wait for</label>
+                        <input
+                          className="w-full"
+                          type="number"
+                          value={step.action.port ?? 5001}
+                          onChange={(e) =>
+                            updateStep(idx, { action: { ...step.action, port: Number(e.target.value) } })
+                          }
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 self-end pb-2">
+                        Uses the target host address. Typical: Synology 5001, Proxmox 8006.
+                      </p>
+                    </div>
+                  )}
 
-                <div className="grid md:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label>Do</label>
-                    <select
-                      className="w-full"
-                      value={step.action.type || "notify"}
-                      onChange={(e) => updateStep(idx, { action: { ...step.action, type: e.target.value } })}
-                    >
-                      {ACTION_TYPES.map((t) => (
-                        <option key={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label>Target</label>
-                    <select
-                      className="w-full"
-                      value={step.action.target_id ?? ""}
-                      onChange={(e) =>
-                        updateStep(idx, {
-                          action: {
-                            ...step.action,
-                            target_id: e.target.value ? Number(e.target.value) : null,
-                          },
-                        })
-                      }
-                    >
-                      <option value="">— none —</option>
-                      {targets.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({t.kind})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label>Delay before (sec)</label>
-                    <input
-                      className="w-full"
-                      type="number"
-                      value={step.delay_before_sec}
-                      onChange={(e) => updateStep(idx, { delay_before_sec: Number(e.target.value) })}
-                    />
-                  </div>
-                </div>
-
-                {(step.action.type === "notify" || step.action.type === "webhook" || step.action.type === "ssh") && (
-                  <div className="space-y-1">
-                    <label>
-                      {step.action.type === "ssh" ? "Command" : step.action.type === "webhook" ? "URL" : "Message"}
+                  <div className="flex flex-wrap gap-4 text-sm text-slate-400">
+                    <label className="flex items-center gap-2 normal-case tracking-normal">
+                      <input
+                        type="checkbox"
+                        checked={step.enabled}
+                        onChange={(e) => updateStep(idx, { enabled: e.target.checked })}
+                      />
+                      Enabled
                     </label>
-                    <input
-                      className="w-full"
-                      value={
-                        step.action.type === "ssh"
-                          ? step.action.command || ""
-                          : step.action.type === "webhook"
-                            ? step.action.url || ""
-                            : step.action.message || ""
-                      }
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (step.action.type === "ssh") updateStep(idx, { action: { ...step.action, command: v } });
-                        else if (step.action.type === "webhook") updateStep(idx, { action: { ...step.action, url: v } });
-                        else updateStep(idx, { action: { ...step.action, message: v } });
-                      }}
-                    />
-                  </div>
-                )}
-                {step.action.type === "wol" && (
-                  <div className="space-y-1">
-                    <label>MAC (optional — otherwise uses target extra.mac)</label>
-                    <input
-                      className="w-full"
-                      value={step.action.mac || ""}
-                      onChange={(e) => updateStep(idx, { action: { ...step.action, mac: e.target.value } })}
-                    />
-                  </div>
-                )}
-                {step.action.type === "wait" && (
-                  <div className="space-y-1">
-                    <label>Wait seconds</label>
-                    <input
-                      className="w-full"
-                      type="number"
-                      value={step.action.seconds ?? 10}
-                      onChange={(e) => updateStep(idx, { action: { ...step.action, seconds: Number(e.target.value) } })}
-                    />
-                  </div>
-                )}
-                {step.action.type === "wait_tcp" && (
-                  <div className="grid md:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label>TCP port to wait for</label>
+                    <label className="flex items-center gap-2 normal-case tracking-normal">
                       <input
-                        className="w-full"
-                        type="number"
-                        value={step.action.port ?? 5001}
-                        onChange={(e) =>
-                          updateStep(idx, { action: { ...step.action, port: Number(e.target.value) } })
-                        }
+                        type="checkbox"
+                        checked={step.continue_on_error}
+                        onChange={(e) => updateStep(idx, { continue_on_error: e.target.checked })}
                       />
-                    </div>
-                    <p className="text-xs text-slate-500 self-end pb-2">
-                      Uses the target host address. Typical: Synology 5001, Proxmox 8006.
-                    </p>
+                      Continue if this step fails
+                    </label>
+                    <label className="flex items-center gap-2 normal-case tracking-normal">
+                      Give up after (seconds)
+                      <input
+                        className="w-24"
+                        type="number"
+                        value={step.timeout_sec}
+                        onChange={(e) => updateStep(idx, { timeout_sec: Number(e.target.value) })}
+                      />
+                    </label>
                   </div>
-                )}
-
-                <div className="flex flex-wrap gap-4 text-sm text-slate-400">
-                  <label className="flex items-center gap-2 normal-case tracking-normal">
-                    <input
-                      type="checkbox"
-                      checked={step.enabled}
-                      onChange={(e) => updateStep(idx, { enabled: e.target.checked })}
-                    />
-                    Enabled
-                  </label>
-                  <label className="flex items-center gap-2 normal-case tracking-normal">
-                    <input
-                      type="checkbox"
-                      checked={step.continue_on_error}
-                      onChange={(e) => updateStep(idx, { continue_on_error: e.target.checked })}
-                    />
-                    Continue on error
-                  </label>
-                  <label className="flex items-center gap-2 normal-case tracking-normal">
-                    timeout
-                    <input
-                      className="w-24"
-                      type="number"
-                      value={step.timeout_sec}
-                      onChange={(e) => updateStep(idx, { timeout_sec: Number(e.target.value) })}
-                    />
-                  </label>
-                </div>
-              </article>
-            ))}
+                  <p className="text-[11px] text-slate-500">
+                    Timeout is how long Blackstart waits for Proxmox/Docker/SSH to finish. It is not the same as hold
+                    (how long the UPS condition must last) or delay (a pause you asked for).
+                  </p>
+                </article>
+              );
+            })}
 
             <button
               className="btn-ghost"
@@ -501,16 +631,18 @@ function Ladder({ steps, kind }: { steps: PolicyStep[]; kind: string }) {
       </div>
       <div className="flex gap-3 min-w-max">
         {steps.map((s, i) => (
-          <div key={s.id ?? i} className="w-40 rounded-xl bg-ink-900/80 p-3 border border-white/5">
-            <div className="text-[10px] text-mint mono">
+          <div key={s.id ?? i} className="w-44 rounded-xl bg-ink-900/80 p-3 border border-white/5">
+            <div className="text-[10px] text-mint">
               {s.trigger.type === "battery_lte"
                 ? `≤ ${s.trigger.value}%`
                 : s.trigger.type === "battery_gte"
                   ? `≥ ${s.trigger.value}%`
-                  : s.trigger.type || "event"}
+                  : s.trigger.all
+                    ? "Grid back + battery"
+                    : triggerLabel(s.trigger.type)}
             </div>
             <div className="text-sm mt-1 leading-tight">{s.name}</div>
-            <div className="text-[10px] text-slate-500 mt-2">{s.action.type}</div>
+            <div className="text-[10px] text-slate-500 mt-2">{actionLabel(s.action.type)}</div>
           </div>
         ))}
       </div>

@@ -8,7 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_session
-from app.engine.executor import docker_from, proxmox_from, ssh_from, synology_from
+from app.engine.executor import (
+    discover_docker_ssh,
+    docker_from,
+    docker_via_ssh,
+    proxmox_from,
+    ssh_from,
+    synology_from,
+    uses_ssh_docker,
+)
 from app.models import Host, Target, utcnow
 from app.schemas import HostIn, HostOut, TargetOut
 from app.security import decrypt_json, encrypt_json, get_current_user
@@ -104,9 +112,12 @@ async def test_host(
         elif row.kind == "synology":
             info = {"info": await synology_from(row).ping()}
         elif row.kind == "docker":
-            ok = await docker_from(row).ping()
-            ver = await docker_from(row).version() if ok else {}
-            info = {"ping": ok, "version": ver.get("Version")}
+            if uses_ssh_docker(row):
+                info = await docker_via_ssh(row, "docker info --format '{{.ServerVersion}}'")
+            else:
+                ok = await docker_from(row).ping()
+                ver = await docker_from(row).version() if ok else {}
+                info = {"ping": ok, "version": ver.get("Version")}
         elif row.kind == "ssh":
             info = await ssh_from(row).ping()
         else:
@@ -137,9 +148,11 @@ async def discover_host(
         elif row.kind == "synology":
             found = await synology_from(row).discover()
         elif row.kind == "docker":
-            found = await docker_from(row).discover()
+            found = await discover_docker_ssh(row) if uses_ssh_docker(row) else await docker_from(row).discover()
+        elif row.kind == "ssh":
+            found = await discover_docker_ssh(row)
         else:
-            raise HTTPException(400, "Discover is not supported for SSH hosts — add custom targets instead")
+            raise HTTPException(400, "Discover is not supported for this host kind")
         row.last_ok_at = utcnow()
         row.last_error = ""
     except HTTPException:
