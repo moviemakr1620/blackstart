@@ -236,7 +236,7 @@ export function Settings() {
           onClick={async () => {
             try {
               await api.post("/api/settings/test-notify", {
-                message: "Blackstart test: if you see this, Discord/notify is working.",
+                message: "If you see this, notifications are working.",
               });
               setMsg("Test notification sent. Check Discord.");
               setErr("");

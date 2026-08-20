@@ -1,5 +1,12 @@
-from app.adapters.notify import looks_like_discord
+from app.adapters.notify import _embed_title, looks_like_discord
 from app.adapters.nut import snapshot_from_vars
+
+
+def test_embed_title_drops_repeated_blackstart():
+    assert _embed_title("Blackstart", "If you see this, notifications are working.") is None
+    assert _embed_title("Blackstart test", "If you see this") is None
+    assert _embed_title("Grid lost", "EcoFlow is on battery.") == "Grid lost"
+    assert _embed_title("Alert", "Alert: grid is down") is None
 
 
 def test_discord_url_detection():

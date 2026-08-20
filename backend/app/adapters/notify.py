@@ -24,11 +24,26 @@ def _discord_color(title: str, message: str) -> int:
     return 0x5CE1C5
 
 
+def _embed_title(title: str, message: str) -> str | None:
+    """Drop titles that just repeat the author name or the body."""
+    t = (title or "").strip()
+    body = (message or "").strip()
+    if not t:
+        return None
+    if t.lower() in {"blackstart", "blackstart test"}:
+        return None
+    if t.lower() == body.lower():
+        return None
+    if body.lower().startswith(t.lower()):
+        return None
+    return t[:256]
+
+
 async def send_notification(
     kind: str,
     url: str,
     message: str,
-    title: str = "Blackstart",
+    title: str = "",
     topic: str = "",
     token: str = "",
 ) -> dict[str, Any]:
@@ -41,38 +56,35 @@ async def send_notification(
     if kind == "discord" or looks_like_discord(url):
         kind = "discord"
 
-    text = f"**{title}**\n{message}".strip()
+    heading = _embed_title(title, message)
+    ntfy_title = heading or "Blackstart"
+    text = message.strip() if message.strip() else (heading or "Blackstart")
     async with httpx.AsyncClient(timeout=15.0) as client:
         if kind == "ntfy":
             target = url.rstrip("/")
             if topic:
                 target = f"{target}/{topic}"
-            resp = await client.post(target, content=message.encode(), headers={"Title": title, "Tags": "zap"})
+            resp = await client.post(target, content=text.encode(), headers={"Title": ntfy_title, "Tags": "zap"})
             resp.raise_for_status()
             return {"ok": True, "status": resp.status_code, "kind": "ntfy"}
         if kind == "gotify":
             resp = await client.post(
                 f"{url.rstrip('/')}/message",
                 params={"token": token} if token else None,
-                json={"title": title, "message": message, "priority": 8},
+                json={"title": ntfy_title, "message": text, "priority": 8},
             )
             resp.raise_for_status()
             return {"ok": True, "kind": "gotify"}
         if kind == "discord":
-            payload = {
-                "username": "Blackstart",
-                "embeds": [
-                    {
-                        "author": {"name": "Blackstart", "icon_url": "attachment://ups.jpg"},
-                        "title": title[:256],
-                        "description": (message or "")[:4000],
-                        "color": _discord_color(title, message),
-                        "thumbnail": {"url": "attachment://ups.jpg"},
-                        "footer": {"text": "Homelab power orchestrator"},
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                ],
+            embed: dict[str, Any] = {
+                "author": {"name": "Blackstart", "icon_url": "attachment://ups.jpg"},
+                "description": text[:4000],
+                "color": _discord_color(title, message),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+            if heading:
+                embed["title"] = heading
+            payload = {"embeds": [embed]}
             files = None
             if UPS_ICON.is_file():
                 files = {"files[0]": ("ups.jpg", UPS_ICON.read_bytes(), "image/jpeg")}

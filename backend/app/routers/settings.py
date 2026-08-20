@@ -37,7 +37,7 @@ async def update_settings(
 
 
 class TestNotifyIn(BaseModel):
-    message: str = "Blackstart test: if you see this, notifications are working."
+    message: str = "If you see this, notifications are working."
 
 
 @router.post("/test-notify")
@@ -52,7 +52,7 @@ async def test_notify(
             kind=str(cfg.get("notify_kind") or "none"),
             url=str(cfg.get("notify_url") or ""),
             message=body.message,
-            title="Blackstart test",
+            title="",
             topic=str(cfg.get("ntfy_topic") or ""),
             token=str(cfg.get("gotify_token") or ""),
         )

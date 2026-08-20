@@ -191,7 +191,7 @@ async def execute_action(
             kind=action.get("kind") or cfg.get("notify_kind") or "webhook",
             url=action.get("url") or cfg.get("notify_url") or "",
             message=action.get("message") or "Blackstart event",
-            title=action.get("title") or "Blackstart",
+            title=action.get("title") or "",
             topic=action.get("topic") or cfg.get("ntfy_topic") or "",
             token=action.get("token") or cfg.get("gotify_token") or "",
         )
@@ -322,7 +322,7 @@ async def execute_action(
             kind="discord" if "discord" in url else "webhook",
             url=url,
             message=action.get("message") or "Blackstart event",
-            title=action.get("title") or "Blackstart",
+            title=action.get("title") or "",
         )
     else:
         raise ActionError(f"Unknown action type: {atype}")
