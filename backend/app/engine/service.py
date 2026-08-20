@@ -559,8 +559,14 @@ class Engine:
         await bus.publish("run.event", {"run_id": run.id, "level": level, "message": message, "payload": payload or {}})
 
     async def _prune_samples(self, session: AsyncSession, hours: int) -> None:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
-        await session.execute(delete(UpsSample).where(UpsSample.ts < cutoff))
+        keep = max(1, hours) * 800
+        newest = (
+            await session.execute(select(UpsSample.id).order_by(UpsSample.id.desc()).limit(keep))
+        ).scalars().all()
+        if not newest:
+            return
+        oldest_keep = min(newest)
+        await session.execute(delete(UpsSample).where(UpsSample.id < oldest_keep))
 
 
 engine = Engine()

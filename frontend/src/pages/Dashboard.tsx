@@ -79,11 +79,23 @@ export function Dashboard() {
       .slice(0, 5);
   }, [policies, onBattery, ups.charge]);
 
-  const chart = samples.map((s) => ({
-    t: new Date(s.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    charge: s.charge,
-    watts: s.watts,
-  }));
+  const chart = useMemo(() => {
+    const pts = samples
+      .filter((s) => s.charge != null && Number.isFinite(Number(s.charge)))
+      .map((s) => ({ ts: new Date(s.ts).getTime(), charge: Number(s.charge) }))
+      .filter((p) => Number.isFinite(p.ts));
+    if (ups.charge != null && Number.isFinite(Number(ups.charge))) {
+      pts.push({ ts: Date.now(), charge: Number(ups.charge) });
+    }
+    if (pts.length === 1) {
+      pts.unshift({ ts: pts[0].ts - 60_000, charge: pts[0].charge });
+    }
+    if (pts.length > 360) {
+      const step = Math.ceil(pts.length / 360);
+      return pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+    }
+    return pts;
+  }, [samples, ups.charge]);
 
   return (
     <div className="p-6 space-y-6">
@@ -141,11 +153,6 @@ export function Dashboard() {
             <Stat
               label="UPS load"
               value={ups.load_pct != null ? `${Math.round(ups.load_pct)}%` : "Not reported"}
-              hint={
-                ups.load_pct != null && ups.watts != null
-                  ? "Computed from output watts / rated watts"
-                  : undefined
-              }
             />
             <Stat
               label="Input"
@@ -171,23 +178,41 @@ export function Dashboard() {
             <h2 className="text-sm font-medium text-slate-300">Charge · last 12 hours</h2>
             <span className="text-[11px] text-slate-500 mono">{ups.status_raw || "—"}</span>
           </div>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chart}>
-                <defs>
-                  <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#5ce1c5" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="#5ce1c5" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="t" stroke="#334" tick={{ fill: "#7b8", fontSize: 11 }} minTickGap={40} />
-                <YAxis domain={[0, 100]} stroke="#334" tick={{ fill: "#7b8", fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{ background: "#121821", border: "1px solid #243040", borderRadius: 8 }}
-                />
-                <Area type="monotone" dataKey="charge" stroke="#5ce1c5" fill="url(#g)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="h-64 relative">
+            {chart.length < 2 ? (
+              <div className="absolute inset-0 grid place-items-center text-sm text-slate-500">
+                Collecting charge samples…
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chart}>
+                  <defs>
+                    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#5ce1c5" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#5ce1c5" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="ts"
+                    type="number"
+                    domain={["dataMin", "dataMax"]}
+                    stroke="#334"
+                    tick={{ fill: "#7b8", fontSize: 11 }}
+                    tickFormatter={(v) =>
+                      new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    }
+                    minTickGap={40}
+                  />
+                  <YAxis domain={[0, 100]} stroke="#334" tick={{ fill: "#7b8", fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ background: "#121821", border: "1px solid #243040", borderRadius: 8 }}
+                    labelFormatter={(v) => new Date(Number(v)).toLocaleString()}
+                    formatter={(value: number) => [`${Math.round(value)}%`, "Charge"]}
+                  />
+                  <Area type="monotone" dataKey="charge" stroke="#5ce1c5" fill="url(#g)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
           {ups.source_kind === "simulator" || !ups.source_kind ? (
             <div className="mt-4 flex flex-wrap gap-2">

@@ -27,34 +27,46 @@ async def ups_status(_: str = Depends(get_current_user)) -> dict:
     return snap
 
 
+def _aware(ts: datetime | None) -> datetime | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
 @router.get("/history")
 async def ups_history(
     hours: int = 24,
     _: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, min(hours, 168)))
+    # SQLite datetime comparisons with tz-aware cutoffs can match zero rows.
+    # Pull recent samples by id, then filter in Python.
+    hours = max(1, min(hours, 168))
     rows = (
-        (
-            await session.execute(
-                select(UpsSample).where(UpsSample.ts >= cutoff).order_by(UpsSample.ts.asc()).limit(5000)
-            )
-        )
+        (await session.execute(select(UpsSample).order_by(UpsSample.id.desc()).limit(hours * 800)))
         .scalars()
         .all()
     )
-    return [
-        {
-            "ts": r.ts.isoformat(),
-            "status": r.status,
-            "charge": r.charge,
-            "runtime_sec": r.runtime_sec,
-            "load_pct": r.load_pct,
-            "watts": r.watts,
-            "input_voltage": r.input_voltage,
-        }
-        for r in rows
-    ]
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    kept = []
+    for r in reversed(rows):
+        ts = _aware(r.ts)
+        if ts is None or ts < cutoff:
+            continue
+        kept.append(
+            {
+                "ts": ts.isoformat(),
+                "status": r.status,
+                "charge": r.charge,
+                "runtime_sec": r.runtime_sec,
+                "load_pct": r.load_pct,
+                "watts": r.watts,
+                "input_voltage": r.input_voltage,
+            }
+        )
+    return kept
 
 
 @router.get("/sources", response_model=list[UpsSourceOut])
