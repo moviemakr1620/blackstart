@@ -54,6 +54,9 @@ function matchingInventory(
       hosts: [],
     };
   }
+  if (want === "k3s") return { kind: "target", targets: targets.filter((t) => t.kind === "k3s_node"), hosts: [] };
+  if (want === "k3s-host") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "k3s") };
+  if (want === "omv") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "omv") };
   return { kind: "target", targets, hosts: [] };
 }
 
@@ -253,6 +256,23 @@ export function Playbooks() {
           </button>
           <button className="btn-danger" onClick={deletePolicy} disabled={!draft || busy}>
             <Trash2 size={14} /> Delete
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={async () => {
+              try {
+                const kinds = new Set(["docker", "synology", "k3s", "omv", "ssh"]);
+                for (const h of hosts.filter((x) => kinds.has(x.kind))) {
+                  await api.post(`/api/hosts/${h.id}/discover`);
+                }
+                await load();
+                fb.toast("Refreshed stacks, containers, and nodes");
+              } catch (e) {
+                fb.toast(e instanceof Error ? e.message : "Refresh failed", "err");
+              }
+            }}
+          >
+            Refresh inventory
           </button>
           <button className="btn-primary" onClick={save} disabled={!draft || busy}>
             Save playbook
@@ -599,7 +619,7 @@ export function Playbooks() {
                       </div>
                     </div>
                   )}
-                  {dockerish(step.action.type) && (
+                  {dockerish(step.action.type) && matchingInventory(step.action.type || "", targets, hosts).targets.length === 0 && (
                     <div className="grid md:grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label>
@@ -623,8 +643,8 @@ export function Playbooks() {
                           }}
                         />
                         <p className="text-[11px] text-slate-500">
-                          Optional if you already picked an inventory target. For remote Docker, set the host to SSH
-                          access in Inventory.
+                          Inventory is empty for this action. Add a Docker (or Synology) host, click Discover / Refresh
+                          inventory, then pick from the Target dropdown.
                         </p>
                       </div>
                       <div className="space-y-1">

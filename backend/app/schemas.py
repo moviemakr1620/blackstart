@@ -75,7 +75,7 @@ class UpsStatus(BaseModel):
 
 class HostIn(BaseModel):
     name: str
-    kind: str = Field(pattern="^(proxmox|synology|docker|ssh)$")
+    kind: str = Field(pattern="^(proxmox|synology|docker|ssh|k3s|omv)$")
     enabled: bool = True
     address: str
     port: int = 0
@@ -206,6 +206,7 @@ class AppSettingsOut(BaseModel):
     default_restore_hold_sec: int
     default_shed_hold_sec: int
     protect_critical: bool
+    primary_ups_id: int | None = None
 
 
 class AppSettingsIn(BaseModel):
@@ -220,6 +221,7 @@ class AppSettingsIn(BaseModel):
     default_restore_hold_sec: int | None = None
     default_shed_hold_sec: int | None = None
     protect_critical: bool | None = None
+    primary_ups_id: int | None = None
 
 
 class SimulateIn(BaseModel):

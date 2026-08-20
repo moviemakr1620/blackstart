@@ -101,14 +101,24 @@ export function Settings() {
     }
   }
 
-  async function enableSource(s: UpsSource) {
+  async function enableSource(s: UpsSource, enabled: boolean) {
     setErr("");
     try {
-      await api.put(`/api/ups/sources/${s.id}`, { ...s, enabled: true, password: "" });
-      setMsg(`Now using ${s.name}.`);
+      await api.put(`/api/ups/sources/${s.id}`, { ...s, enabled, password: "" });
+      setMsg(enabled ? `${s.name} enabled.` : `${s.name} disabled.`);
       await load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not enable source");
+      setErr(e instanceof Error ? e.message : "Could not update source");
+    }
+  }
+
+  async function setPrimary(s: UpsSource) {
+    try {
+      await api.put("/api/settings", { ...settings, primary_ups_id: s.id });
+      setMsg(`${s.name} is the UPS playbooks watch.`);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not set primary UPS");
     }
   }
 
@@ -342,8 +352,8 @@ export function Settings() {
         <h2 className="font-medium">UPS sources</h2>
         <p className="text-sm text-slate-500">
           PeaNUT&apos;s web UI can show the EcoFlow while its <em>API</em> still requires the PeaNUT login. Save that
-          username and password here. Device name can be left blank — Blackstart will pick the first UPS PeaNUT reports.
-          Only one source is enabled at a time.
+          username and password here. Device name can be left blank. Enable more than one UPS if you want; playbooks
+          follow the primary. The dashboard switcher appears when two or more are on.
         </p>
         <div className="space-y-2">
           {sources.map((s) => (
@@ -351,7 +361,8 @@ export function Settings() {
               <div>
                 <div className="text-sm">
                   {s.name} <span className="text-slate-500">({s.kind})</span>
-                  {s.enabled && <span className="text-mint text-xs ml-2">active</span>}
+                  {s.enabled && <span className="text-mint text-xs ml-2">on</span>}
+                  {settings?.primary_ups_id === s.id && <span className="text-sky text-xs ml-2">playbooks</span>}
                   {s.username && <span className="text-slate-500 text-xs ml-2">user {s.username}</span>}
                   {s.has_password && <span className="text-slate-500 text-xs ml-1">· password set</span>}
                   {!s.username && s.kind === "peanut" && (
@@ -369,9 +380,12 @@ export function Settings() {
                 <button className="btn-ghost" onClick={() => testSource(s.id)}>
                   Test
                 </button>
-                {!s.enabled && (
-                  <button className="btn-primary" onClick={() => enableSource(s)}>
-                    Use this
+                <button className="btn-ghost" onClick={() => enableSource(s, !s.enabled)}>
+                  {s.enabled ? "Disable" : "Enable"}
+                </button>
+                {s.enabled && (
+                  <button className="btn-primary" onClick={() => setPrimary(s)}>
+                    Playbooks use this
                   </button>
                 )}
                 <button

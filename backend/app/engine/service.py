@@ -47,6 +47,8 @@ class Engine:
         self.simulator = Simulator()
         self.conditions = ConditionState()
         self.last_status: dict[str, Any] = {}
+        self.snapshots: dict[int, dict[str, Any]] = {}
+        self.primary_id: int | None = None
         self.last_error: str = ""
         self.power_mode: str = "unknown"  # online | on_battery | shedding | restoring
         self._task: asyncio.Task[None] | None = None
@@ -55,6 +57,7 @@ class Engine:
         self._abort = False
         self.running_run_id: int | None = None
         self._prev_on_battery: bool | None = None
+        self._prev_ob: dict[int, bool | None] = {}
         self._online_since: float | None = None
 
     def start(self) -> None:
@@ -92,13 +95,16 @@ class Engine:
             except asyncio.TimeoutError:
                 pass
 
-    async def read_ups(self, session: AsyncSession) -> dict[str, Any]:
+    async def read_ups(self, session: AsyncSession) -> tuple[dict[str, Any], UpsSource]:
         source = (
-            await session.execute(select(UpsSource).where(UpsSource.enabled.is_(True)).limit(1))
+            await session.execute(select(UpsSource).where(UpsSource.enabled.is_(True)).order_by(UpsSource.id).limit(1))
         ).scalar_one_or_none()
         if source is None:
             raise RuntimeError("No enabled UPS source. Add PeaNUT, NUT, or the simulator in Settings.")
+        snap = await self.read_one(session, source)
+        return snap, source
 
+    async def read_one(self, session: AsyncSession, source: UpsSource) -> dict[str, Any]:
         if source.kind == "simulator":
             snap = self.simulator.snapshot()
         elif source.kind == "peanut":
@@ -141,69 +147,62 @@ class Engine:
 
     async def tick(self, session: AsyncSession) -> int:
         settings = await get_settings_map(session)
-        source = (
-            await session.execute(select(UpsSource).where(UpsSource.enabled.is_(True)).limit(1))
-        ).scalar_one_or_none()
-        interval = source.poll_interval_sec if source else 5
-
-        try:
-            snap, source = await self.read_ups(session)
-            self.last_error = ""
-        except Exception as exc:  # noqa: BLE001
-            self.last_error = str(exc)
-            self.last_status = {
-                "connected": False,
-                "error": str(exc),
-                "status": "unknown",
-                "on_battery": False,
-            }
-            await bus.publish("ups.sample", self.last_status)
-            return interval
-
-        self.last_status = snap
-        session.add(
-            UpsSample(
-                source_id=source.id,
-                status=str(snap.get("status") or ""),
-                charge=snap.get("charge"),
-                runtime_sec=snap.get("runtime_sec"),
-                load_pct=snap.get("load_pct"),
-                watts=snap.get("watts"),
-                input_voltage=snap.get("input_voltage"),
-                raw_json=json.dumps(snap.get("raw") or {})[:8000],
-            )
+        sources = (
+            (await session.execute(select(UpsSource).where(UpsSource.enabled.is_(True)).order_by(UpsSource.id)))
+            .scalars()
+            .all()
         )
-        await self._prune_samples(session, int(settings.get("sample_retention_hours") or 168))
-        await bus.publish("ups.sample", snap)
+        if not sources:
+            self.last_error = "No enabled UPS source."
+            self.last_status = {"connected": False, "error": self.last_error, "status": "unknown", "sources": []}
+            await bus.publish("ups.sample", self.last_status)
+            return 5
 
-        on_battery = bool(snap.get("on_battery"))
+        interval = min(max(2, s.poll_interval_sec) for s in sources)
         now = time.monotonic()
+        for src in sources:
+            try:
+                snap = await self.read_one(session, src)
+            except Exception as exc:  # noqa: BLE001
+                snap = {
+                    "connected": False,
+                    "error": str(exc),
+                    "status": "unknown",
+                    "on_battery": False,
+                    "source_id": src.id,
+                    "source_name": src.name,
+                    "source_kind": src.kind,
+                }
+            self.snapshots[src.id] = snap
+            if snap.get("connected"):
+                session.add(
+                    UpsSample(
+                        source_id=src.id,
+                        status=str(snap.get("status") or ""),
+                        charge=snap.get("charge"),
+                        runtime_sec=snap.get("runtime_sec"),
+                        load_pct=snap.get("load_pct"),
+                        watts=snap.get("watts"),
+                        input_voltage=snap.get("input_voltage"),
+                        raw_json=json.dumps(snap.get("raw") or {})[:8000],
+                    )
+                )
 
-        if on_battery:
-            self._online_since = None
-            if self._prev_on_battery is False or self._prev_on_battery is None:
-                await self._open_episode(session, snap)
-                self.conditions.reset_episode()
-                self.power_mode = "on_battery"
-                await bus.publish("state.changed", {"mode": self.power_mode})
-        else:
-            if self._online_since is None:
-                self._online_since = now
-            if self._prev_on_battery is True:
-                self.power_mode = "online"
-                await bus.publish("state.changed", {"mode": self.power_mode})
+        await self._prune_samples(session, int(settings.get("sample_retention_hours") or 168))
 
-        self._prev_on_battery = on_battery
-
-        episode = (
-            await session.execute(
-                select(Episode).where(Episode.status == "open").order_by(Episode.id.desc()).limit(1)
-            )
-        ).scalar_one_or_none()
-        if episode and snap.get("charge") is not None:
-            current = float(snap["charge"])
-            if episode.min_charge is None or current < episode.min_charge:
-                episode.min_charge = current
+        primary_id = settings.get("primary_ups_id")
+        ids = {s.id for s in sources}
+        if primary_id not in ids:
+            primary_id = sources[0].id
+        self.primary_id = int(primary_id)
+        primary = dict(self.snapshots.get(self.primary_id) or {})
+        self.last_status = {
+            **primary,
+            "primary_id": self.primary_id,
+            "sources": [self.snapshots[s.id] for s in sources],
+        }
+        self.last_error = str(primary.get("error") or "")
+        await bus.publish("ups.sample", self.last_status)
 
         if settings.get("engine_paused"):
             return interval
@@ -221,14 +220,58 @@ class Engine:
             .unique()
             .all()
         )
+        # Playbooks run against the primary UPS so a second unit cannot double-shed.
+        await self._evaluate_source(session, settings, self.primary_id, primary, policies, now)
+        return interval
+
+    async def _evaluate_source(
+        self,
+        session: AsyncSession,
+        settings: dict[str, Any],
+        source_id: int,
+        snap: dict[str, Any],
+        policies: list[Policy],
+        now: float,
+    ) -> None:
+        if not snap.get("connected") and snap.get("error"):
+            return
+        on_battery = bool(snap.get("on_battery"))
+        prev = self._prev_ob.get(source_id)
+        cause = f"on_battery:{source_id}"
+
+        if on_battery:
+            if prev is False or prev is None:
+                await self._open_episode(session, snap, cause=cause)
+                self.conditions.reset_source(source_id)
+                if source_id == self.primary_id:
+                    self.power_mode = "on_battery"
+                    await bus.publish("state.changed", {"mode": self.power_mode})
+        else:
+            if prev is True and source_id == self.primary_id:
+                self.power_mode = "online"
+                await bus.publish("state.changed", {"mode": self.power_mode})
+        self._prev_ob[source_id] = on_battery
+        if source_id == self.primary_id:
+            self._prev_on_battery = on_battery
+
+        episode = (
+            await session.execute(
+                select(Episode)
+                .where(Episode.status == "open", Episode.cause == cause)
+                .order_by(Episode.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if episode and snap.get("charge") is not None:
+            current = float(snap["charge"])
+            if episode.min_charge is None or current < episode.min_charge:
+                episode.min_charge = current
 
         due: list[tuple[Policy, PolicyStep]] = []
         for policy in policies:
-            # Restore playbooks only run during an open outage episode so a
-            # clean boot on grid power does not WOL the NAS and start VMs.
             if policy.kind == "restore" and episode is None:
                 continue
-            prefix = f"{policy.kind}:"
+            prefix = f"{source_id}:{policy.kind}:"
             hold_default = (
                 float(settings.get("default_shed_hold_sec") or 0)
                 if policy.kind == "shed"
@@ -249,7 +292,7 @@ class Engine:
             episode
             and not on_battery
             and episode.status == "open"
-            and self.power_mode in {"online", "restoring"}
+            and (source_id != self.primary_id or self.power_mode in {"online", "restoring"})
         ):
             pending = (
                 await session.execute(
@@ -261,7 +304,7 @@ class Engine:
             ).scalars().all()
             restore_policies = [p for p in policies if p.kind == "restore"]
             restore_done = all(
-                f"restore:{s.id}" in self.conditions.fired
+                f"{source_id}:restore:{s.id}" in self.conditions.fired
                 for p in restore_policies
                 for s in p.steps
                 if s.enabled
@@ -271,20 +314,16 @@ class Engine:
                 episode.ended_at = utcnow()
                 await bus.publish("episode.closed", {"id": episode.id})
 
-        return interval
-
-    async def _open_episode(self, session: AsyncSession, snap: dict[str, Any]) -> Episode:
+    async def _open_episode(self, session: AsyncSession, snap: dict[str, Any], cause: str = "on_battery") -> Episode:
         existing = (
-            await session.execute(select(Episode).where(Episode.status == "open").limit(1))
+            await session.execute(select(Episode).where(Episode.status == "open", Episode.cause == cause).limit(1))
         ).scalar_one_or_none()
         if existing:
-            # A new outage starts — close the leftover episode so restore
-            # pending flags and history stay per-event.
             existing.status = "closed"
             existing.ended_at = utcnow()
             existing.notes = (existing.notes or "") + " | superseded by new outage"
         ep = Episode(
-            cause="on_battery",
+            cause=cause,
             status="open",
             min_charge=snap.get("charge"),
             notes=str(snap.get("status_raw") or ""),

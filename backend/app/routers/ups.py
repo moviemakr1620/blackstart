@@ -38,6 +38,7 @@ def _aware(ts: datetime | None) -> datetime | None:
 @router.get("/history")
 async def ups_history(
     hours: int = 24,
+    source_id: int | None = None,
     _: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
@@ -54,6 +55,8 @@ async def ups_history(
     for r in reversed(rows):
         ts = _aware(r.ts)
         if ts is None or ts < cutoff:
+            continue
+        if source_id is not None and r.source_id != source_id:
             continue
         kept.append(
             {
@@ -84,10 +87,6 @@ async def create_source(
     _: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> UpsSourceOut:
-    if body.enabled:
-        existing = (await session.execute(select(UpsSource).where(UpsSource.enabled.is_(True)))).scalars().all()
-        for row in existing:
-            row.enabled = False
     row = UpsSource(
         name=body.name,
         kind=body.kind,
@@ -117,11 +116,6 @@ async def update_source(
     row = await session.get(UpsSource, source_id)
     if not row:
         raise HTTPException(404, "UPS source not found")
-    if body.enabled:
-        others = (await session.execute(select(UpsSource).where(UpsSource.id != source_id))).scalars().all()
-        for other in others:
-            if other.enabled:
-                other.enabled = False
     row.name = body.name
     row.kind = body.kind
     row.enabled = body.enabled

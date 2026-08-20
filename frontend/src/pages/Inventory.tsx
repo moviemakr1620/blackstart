@@ -4,8 +4,8 @@ import { useFeedback } from "../feedback";
 import { HOST_KIND_HELP } from "../labels";
 import type { Host, Target } from "../types";
 
-const HOST_KINDS = ["proxmox", "synology", "docker", "ssh"] as const;
-const TARGET_KINDS = ["vm", "lxc", "container", "stack", "nas", "host", "custom"];
+const HOST_KINDS = ["proxmox", "synology", "docker", "k3s", "omv", "ssh"] as const;
+const TARGET_KINDS = ["vm", "lxc", "container", "stack", "nas", "k3s_node", "host", "custom"];
 
 const emptyHost = {
   name: "",
@@ -185,6 +185,15 @@ export function Inventory() {
     try {
       const res = await api.post<{ ok: boolean }>(`/api/hosts/${id}/test`);
       setMsg(res.ok ? "Connection OK." : "Test failed.");
+      const host = hosts.find((h) => h.id === id);
+      if (res.ok && host && ["docker", "synology", "k3s", "omv", "ssh"].includes(host.kind)) {
+        try {
+          await api.post(`/api/hosts/${id}/discover`);
+          setMsg("Connection OK. Inventory refreshed from that host.");
+        } catch {
+          /* discover is best-effort after test */
+        }
+      }
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Test failed");
@@ -256,7 +265,8 @@ export function Inventory() {
               value={hostForm.kind}
               onChange={(e) => {
                 const kind = e.target.value as Host["kind"];
-                const port = kind === "proxmox" ? 8006 : kind === "synology" ? 5001 : kind === "docker" ? 2375 : 22;
+                const port =
+                  kind === "proxmox" ? 8006 : kind === "synology" ? 5001 : kind === "omv" ? 443 : kind === "docker" ? 22 : 22;
                 setHostForm({ ...hostForm, kind, port });
               }}
             >
@@ -339,6 +349,12 @@ export function Inventory() {
               <option value="api">Docker TCP socket / unix socket</option>
             </select>
           </div>
+        )}
+        {hostForm.kind === "k3s" && (
+          <p className="text-xs text-slate-500">
+            SSH to the control-plane Pi/VM (port 22). Discover lists nodes. Same SSH user/key is used to shut workers
+            down via their InternalIP.
+          </p>
         )}
         {hostForm.kind === "proxmox" ? (
           <div className="grid md:grid-cols-2 gap-3">

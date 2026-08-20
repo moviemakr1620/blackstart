@@ -15,6 +15,11 @@ class ConditionState:
         self.true_since.clear()
         self.fired.clear()
 
+    def reset_source(self, source_id: int) -> None:
+        prefix = f"{source_id}:"
+        self.true_since = {k: v for k, v in self.true_since.items() if not k.startswith(prefix)}
+        self.fired = {k for k in self.fired if not k.startswith(prefix)}
+
     def reset_restore_side(self) -> None:
         """Keep shed firings, clear restore ones — used when flipping back to battery."""
         self.fired = {k for k in self.fired if not k.startswith("restore:")}

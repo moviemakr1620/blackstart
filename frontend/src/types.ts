@@ -22,6 +22,8 @@ export type UpsStatus = {
   power_mode?: string;
   running_run_id?: number | null;
   reported_keys?: string[];
+  primary_id?: number | null;
+  sources?: UpsStatus[];
 };
 
 export type UpsSource = {
@@ -41,7 +43,7 @@ export type UpsSource = {
 export type Host = {
   id: number;
   name: string;
-  kind: "proxmox" | "synology" | "docker" | "ssh";
+  kind: "proxmox" | "synology" | "docker" | "ssh" | "k3s" | "omv";
   enabled: boolean;
   address: string;
   port: number;
@@ -169,6 +171,7 @@ export type AppSettings = {
   default_restore_hold_sec: number;
   default_shed_hold_sec: number;
   protect_critical: boolean;
+  primary_ups_id?: number | null;
 };
 
 export type Sample = {

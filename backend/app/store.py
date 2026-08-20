@@ -20,6 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "default_restore_hold_sec": 120,
     "default_shed_hold_sec": 15,
     "protect_critical": True,
+    "primary_ups_id": None,
 }
 
 

@@ -15,6 +15,8 @@ export const CATEGORIES: { id: string; label: string }[] = [
   { id: "docker", label: "Docker" },
   { id: "synology", label: "Synology" },
   { id: "network", label: "Network" },
+  { id: "k3s", label: "k3s" },
+  { id: "omv", label: "OpenMediaVault" },
   { id: "ssh", label: "SSH" },
   { id: "restore", label: "Restore" },
 ];
@@ -24,7 +26,7 @@ export const ACTIONS: {
   label: string;
   help: string;
   category: string;
-  target: "none" | "notify" | "vm" | "container" | "stack" | "nas" | "proxmox-host" | "host" | "wol";
+  target: "none" | "notify" | "vm" | "container" | "stack" | "nas" | "proxmox-host" | "host" | "wol" | "k3s" | "k3s-host" | "omv";
 }[] = [
   { value: "notify", label: "Send notification", help: "Picks a channel from Settings.", category: "notify", target: "notify" },
   { value: "proxmox_shutdown", label: "ACPI shutdown", help: "Ask the guest to shut down cleanly.", category: "proxmox", target: "vm" },
@@ -38,6 +40,12 @@ export const ACTIONS: {
   { value: "synology_shutdown", label: "Shut down NAS / HA cluster", help: "Standalone DSM, or the whole SHA cluster if HA is enabled.", category: "synology", target: "nas" },
   { value: "synology_stop_container", label: "Stop container", help: "Via DSM Container Manager.", category: "synology", target: "container" },
   { value: "synology_start_container", label: "Start container", help: "Via DSM Container Manager.", category: "synology", target: "container" },
+  { value: "k3s_drain", label: "Drain node", help: "kubectl drain so pods move off the node.", category: "k3s", target: "k3s" },
+  { value: "k3s_uncordon", label: "Uncordon node", help: "Allow scheduling again after restore.", category: "k3s", target: "k3s" },
+  { value: "k3s_shutdown_node", label: "Drain + shut down node", help: "Drain, then SSH shutdown -h now to that Pi/node.", category: "k3s", target: "k3s" },
+  { value: "k3s_shutdown_cluster", label: "Shut down whole cluster", help: "Drain and power off every node, server last.", category: "k3s", target: "k3s-host" },
+  { value: "omv_shutdown", label: "Shut down OMV", help: "RPC halt, SSH fallback.", category: "omv", target: "omv" },
+  { value: "omv_reboot", label: "Reboot OMV", help: "RPC reboot.", category: "omv", target: "omv" },
   { value: "wol", label: "Wake on LAN", help: "Magic packet. HA sends both node MACs.", category: "network", target: "wol" },
   { value: "wait", label: "Wait a few seconds", help: "Pause before the next step.", category: "network", target: "none" },
   { value: "wait_tcp", label: "Wait until a host answers", help: "Poll DSM 5001 / Proxmox 8006 until it is up.", category: "network", target: "host" },
@@ -69,7 +77,10 @@ export function humanize(value?: string) {
 export const HOST_KIND_HELP: Record<string, string> = {
   proxmox: "Talks to the Proxmox API with a token. Discover imports VMs and LXCs.",
   synology:
-    "Talks to DSM. For SHA, use the cluster virtual IP, tick HA, and save both node MACs so shutdown/WOL hit the pair.",
-  docker: "Talks to Docker on another box. Prefer SSH unless you have exposed the Docker TCP socket.",
-  ssh: "Generic Linux box. Use for custom commands, or Discover to list Docker over SSH.",
+    "Talks to DSM. For SHA, use the cluster virtual IP, tick HA, and save both node MACs so shutdown/WOL hit the pair. Container Manager on the NAS is this host — not a Docker host.",
+  docker:
+    "Not a dedicated Docker appliance. This is how Blackstart talks to Docker: SSH into a Proxmox VM (recommended) or a TCP socket. Synology containers belong on the Synology host instead.",
+  ssh: "Generic Linux box. Custom commands, or Discover to list Docker over SSH.",
+  k3s: "SSH to the k3s control plane. Discover imports nodes. Shutdown drains, then poweroffs each node (workers first).",
+  omv: "OpenMediaVault via its RPC API, with SSH fallback. Use the OMV web user. Discover also lists Docker if the SSH user can run docker.",
 };

@@ -18,20 +18,24 @@ export function Dashboard() {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [busy, setBusy] = useState("");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   async function refresh() {
-    const [u, h, e, p, s] = await Promise.all([
+    const [u, e, p, s] = await Promise.all([
       api.get<UpsStatus>("/api/ups/status"),
-      api.get<Sample[]>("/api/ups/history?hours=12"),
       api.get<{ id: number; ts: string; level: string; message: string }[]>("/api/events/recent"),
       api.get<Policy[]>("/api/policies"),
       api.get<AppSettings>("/api/settings"),
     ]);
     setUps(u);
-    setSamples(h);
     setEvents(e);
     setPolicies(p);
     setSettings(s);
+    const sid = selectedId ?? u.primary_id ?? u.source_id ?? null;
+    const hist = await api.get<Sample[]>(
+      sid ? `/api/ups/history?hours=12&source_id=${sid}` : "/api/ups/history?hours=12",
+    );
+    setSamples(hist);
   }
 
   useEffect(() => {
@@ -56,7 +60,19 @@ export function Dashboard() {
     };
   }, []);
 
-  const onBattery = Boolean(ups.on_battery);
+  const fleet = (ups.sources && ups.sources.length > 0 ? ups.sources : [ups]).filter((s) => s.source_id || s.source_name);
+  const view = fleet.find((s) => s.source_id === (selectedId ?? ups.primary_id ?? ups.source_id)) || ups;
+
+  useEffect(() => {
+    const sid = selectedId ?? ups.primary_id ?? ups.source_id;
+    if (!sid) return;
+    api
+      .get<Sample[]>(`/api/ups/history?hours=12&source_id=${sid}`)
+      .then(setSamples)
+      .catch(() => undefined);
+  }, [selectedId, ups.primary_id, ups.source_id]);
+
+  const onBattery = Boolean(view.on_battery);
   const mode = ups.power_mode || (onBattery ? "on_battery" : ups.status || "unknown");
 
   async function simulate(event: string, extra: Record<string, unknown> = {}) {
@@ -84,8 +100,8 @@ export function Dashboard() {
       .filter((s) => s.charge != null && Number.isFinite(Number(s.charge)))
       .map((s) => ({ ts: new Date(s.ts).getTime(), charge: Number(s.charge) }))
       .filter((p) => Number.isFinite(p.ts));
-    if (ups.charge != null && Number.isFinite(Number(ups.charge))) {
-      pts.push({ ts: Date.now(), charge: Number(ups.charge) });
+    if (view.charge != null && Number.isFinite(Number(view.charge))) {
+      pts.push({ ts: Date.now(), charge: Number(view.charge) });
     }
     if (pts.length === 1) {
       pts.unshift({ ts: pts[0].ts - 60_000, charge: pts[0].charge });
@@ -95,7 +111,7 @@ export function Dashboard() {
       return pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
     }
     return pts;
-  }, [samples, ups.charge]);
+  }, [samples, view.charge]);
 
   return (
     <div className="p-6 space-y-6">
@@ -103,12 +119,12 @@ export function Dashboard() {
         <div>
           <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Control room</div>
           <h1 className="text-2xl font-semibold">
-            {ups.model || "EcoFlow Delta 3 Plus"}
-            <span className="text-slate-500 font-normal text-base ml-3">{ups.device || ups.source_name}</span>
+            {view.model || view.source_name || "EcoFlow Delta 3 Plus"}
+            <span className="text-slate-500 font-normal text-base ml-3">{view.device || view.source_name}</span>
           </h1>
         </div>
         <div className="flex items-center gap-2">
-          <ModePill mode={mode} connected={Boolean(ups.connected) && !ups.error} />
+          <ModePill mode={mode} connected={Boolean(view.connected) && !view.error} />
           {settings && !settings.live_actions && (
             <span className="text-xs px-2 py-1 rounded-full bg-amber/15 text-amber border border-amber/30">
               Dry-run mode — actions will not touch hosts
@@ -128,10 +144,36 @@ export function Dashboard() {
         </div>
       </header>
 
-      {ups.error && (
+      {fleet.length > 1 && (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {fleet.map((s) => {
+            const active = (selectedId ?? ups.primary_id ?? ups.source_id) === s.source_id;
+            return (
+              <button
+                key={s.source_id}
+                onClick={() => setSelectedId(s.source_id ?? null)}
+                className={`card p-4 text-left ${active ? "ring-1 ring-mint/50" : ""}`}
+              >
+                <div className="flex justify-between gap-2">
+                  <div className="font-medium">{s.source_name || s.device || "UPS"}</div>
+                  <span className={`text-xs ${s.on_battery ? "text-amber" : s.connected ? "text-mint" : "text-rose"}`}>
+                    {s.on_battery ? "on battery" : s.connected ? "online" : "down"}
+                  </span>
+                </div>
+                <div className="text-2xl mt-1">{s.charge != null ? `${Math.round(s.charge)}%` : "—"}</div>
+                <div className="text-xs text-slate-500">
+                  {s.watts != null ? `${Math.round(s.watts)} W` : ""} {s.source_kind}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {view.error && (
         <div className="card px-4 py-3 text-sm text-rose border-rose/30 space-y-1">
-          <div>UPS source error: {ups.error}</div>
-          {(ups.error.includes("401") || ups.error.toLowerCase().includes("unauthorized")) && (
+          <div>UPS source error: {view.error}</div>
+          {(view.error.includes("401") || view.error.toLowerCase().includes("unauthorized")) && (
             <div className="text-slate-300">
               PeaNUT&apos;s dashboard can be logged in while the API still rejects Blackstart. Edit the PeaNUT source
               in Settings and save the same username/password you use to sign into PeaNUT, then click Test.
@@ -142,33 +184,33 @@ export function Dashboard() {
 
       <div className="grid xl:grid-cols-[280px_1fr_320px] gap-5">
         <section className="card p-5">
-          <BatteryRing charge={ups.charge} onBattery={onBattery} />
-          <div className="text-center text-sm text-slate-400 -mt-2">{statusLabel(ups.status, onBattery)}</div>
+          <BatteryRing charge={view.charge} onBattery={onBattery} />
+          <div className="text-center text-sm text-slate-400 -mt-2">{statusLabel(view.status, onBattery)}</div>
           <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <Stat label="Runtime" value={formatRuntime(ups.runtime_sec)} />
+            <Stat label="Runtime" value={formatRuntime(view.runtime_sec)} />
             <Stat
               label="Output"
-              value={ups.watts != null ? `${Math.round(ups.watts)} W` : "Not reported"}
+              value={view.watts != null ? `${Math.round(view.watts)} W` : "Not reported"}
             />
             <Stat
               label="UPS load"
-              value={ups.load_pct != null ? `${Math.round(ups.load_pct)}%` : "Not reported"}
+              value={view.load_pct != null ? `${Math.round(view.load_pct)}%` : "Not reported"}
             />
             <Stat
               label="Input"
               value={
-                ups.input_voltage != null
-                  ? `${Math.round(ups.input_voltage)} V`
-                  : ups.input_watts != null
-                    ? `${Math.round(ups.input_watts)} W`
+                view.input_voltage != null
+                  ? `${Math.round(view.input_voltage)} V`
+                  : view.input_watts != null
+                    ? `${Math.round(view.input_watts)} W`
                     : "Not reported"
               }
             />
           </div>
-          {ups.reported_keys && ups.reported_keys.length > 0 && (
+          {view.reported_keys && view.reported_keys.length > 0 && (
             <details className="mt-3 text-[11px] text-slate-500">
               <summary className="cursor-pointer">What PeaNUT actually sent</summary>
-              <div className="mono mt-2 break-all">{ups.reported_keys.join(", ")}</div>
+              <div className="mono mt-2 break-all">{view.reported_keys.join(", ")}</div>
             </details>
           )}
         </section>
@@ -176,7 +218,7 @@ export function Dashboard() {
         <section className="card p-5 min-h-[340px]">
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-medium text-slate-300">Charge · last 12 hours</h2>
-            <span className="text-[11px] text-slate-500 mono">{ups.status_raw || "—"}</span>
+            <span className="text-[11px] text-slate-500 mono">{view.status_raw || "—"}</span>
           </div>
           <div className="h-64 relative">
             {chart.length < 2 ? (
@@ -214,7 +256,7 @@ export function Dashboard() {
               </ResponsiveContainer>
             )}
           </div>
-          {ups.source_kind === "simulator" || !ups.source_kind ? (
+          {view.source_kind === "simulator" || !view.source_kind ? (
             <div className="mt-4 flex flex-wrap gap-2">
               <button className="btn-warn" disabled={!!busy} onClick={() => simulate("pull_plug")}>
                 Pull the plug

@@ -12,6 +12,8 @@ from app.engine.executor import (
     discover_docker_ssh,
     docker_from,
     docker_via_ssh,
+    k3s_from,
+    omv_from,
     proxmox_from,
     ssh_from,
     synology_from,
@@ -126,6 +128,10 @@ async def test_host(
                 info = {"ping": ok, "version": ver.get("Version")}
         elif row.kind == "ssh":
             info = await ssh_from(row).ping()
+        elif row.kind == "k3s":
+            info = {"nodes": await k3s_from(row).nodes()}
+        elif row.kind == "omv":
+            info = await omv_from(row).ping()
         else:
             raise HTTPException(400, f"unknown host kind {row.kind}")
         row.last_ok_at = utcnow()
@@ -157,6 +163,14 @@ async def discover_host(
             found = await discover_docker_ssh(row) if uses_ssh_docker(row) else await docker_from(row).discover()
         elif row.kind == "ssh":
             found = await discover_docker_ssh(row)
+        elif row.kind == "k3s":
+            found = await k3s_from(row).discover()
+        elif row.kind == "omv":
+            found = await omv_from(row).discover()
+            try:
+                found.extend(await discover_docker_ssh(row))
+            except Exception:
+                pass
         else:
             raise HTTPException(400, "Discover is not supported for this host kind")
         row.last_ok_at = utcnow()

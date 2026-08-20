@@ -7,7 +7,9 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.docker_host import DockerAdapter
+from app.adapters.k3s import K3sAdapter
 from app.adapters.notify import send_notification
+from app.adapters.omv import OmvAdapter
 from app.adapters.proxmox import ProxmoxAdapter
 from app.adapters.ssh import SshAdapter
 from app.adapters.synology import SynologyAdapter
@@ -165,6 +167,30 @@ async def discover_docker_ssh(host: Host) -> list[dict[str, Any]]:
     return items
 
 
+def k3s_from(host: Host) -> K3sAdapter:
+    extra = _extra(host)
+    return K3sAdapter(ssh_from(host), kubeconfig=str(extra.get("kubeconfig") or "/etc/rancher/k3s/k3s.yaml"))
+
+
+def omv_from(host: Host) -> OmvAdapter:
+    extra = _extra(host)
+    c = _creds(host)
+    ssh = None
+    if c.get("username") or c.get("private_key") or c.get("key"):
+        ssh = ssh_from(host)
+        if (ssh.port or 22) == (host.port or 443):
+            ssh.port = int(extra.get("ssh_port") or 22)
+    return OmvAdapter(
+        address=host.address,
+        port=host.port or 443,
+        username=c.get("username") or "",
+        password=c.get("password") or "",
+        verify_tls=host.verify_tls,
+        use_https=extra.get("https", True),
+        ssh=ssh,
+    )
+
+
 def ssh_from(host: Host) -> SshAdapter:
     c = _creds(host)
     return SshAdapter(
@@ -183,6 +209,10 @@ STOP_ACTIONS = {
     "docker_stop_stack",
     "synology_shutdown",
     "synology_ha_shutdown",
+    "k3s_shutdown_node",
+    "k3s_shutdown_cluster",
+    "k3s_drain",
+    "omv_shutdown",
     "ssh",
     "shutdown",
     "stop",
@@ -213,6 +243,9 @@ async def execute_action(
         "docker_stop_stack",
         "synology_shutdown",
         "synology_ha_shutdown",
+        "k3s_shutdown_node",
+        "k3s_shutdown_cluster",
+        "omv_shutdown",
         "shutdown",
         "stop",
         "host_shutdown",
@@ -429,6 +462,49 @@ async def execute_action(
         result = await ssh_from(host).run(str(command), timeout=float(action.get("timeout") or 30))
         if result.get("exit_code") not in (0, None) and not action.get("ignore_exit"):
             raise ActionError(f"SSH exit {result.get('exit_code')}: {result.get('stderr')}")
+    elif atype in {"k3s_drain", "k3s_uncordon", "k3s_shutdown_node"}:
+        if not host:
+            raise ActionError("k3s action needs the control-plane host")
+        adapter = k3s_from(host)
+        node = action.get("node") or (target.external_id if target else "") or (target.name if target else "")
+        if not node:
+            raise ActionError("Pick a k3s node")
+        if atype == "k3s_drain":
+            result = await adapter.drain(str(node))
+        elif atype == "k3s_uncordon":
+            result = await adapter.uncordon(str(node))
+        else:
+            await adapter.drain(str(node))
+            addr = (target and _extra(target).get("address")) or action.get("address") or node
+            result = await adapter.shutdown_address(str(addr))
+    elif atype == "k3s_shutdown_cluster":
+        if not host:
+            raise ActionError("k3s cluster shutdown needs the control-plane host")
+        adapter = k3s_from(host)
+        nodes = await adapter.nodes()
+        notes = []
+        workers = [n for n in nodes if "control-plane" not in str(n.get("name"))]
+        # Drain everyone, shut workers first, then remaining (server last).
+        ordered = workers + [n for n in nodes if n not in workers]
+        for n in ordered:
+            try:
+                await adapter.drain(n["name"])
+            except Exception as exc:  # noqa: BLE001
+                notes.append({"drain": n["name"], "error": str(exc)})
+            addr = n.get("address") or n["name"]
+            try:
+                notes.append({"shutdown": addr, "data": await adapter.shutdown_address(str(addr))})
+            except Exception as exc:  # noqa: BLE001
+                notes.append({"shutdown": addr, "error": str(exc)})
+        result = {"nodes": notes}
+    elif atype == "omv_shutdown":
+        if not host:
+            raise ActionError("Need an OpenMediaVault host")
+        result = {"data": await omv_from(host).shutdown()}
+    elif atype == "omv_reboot":
+        if not host:
+            raise ActionError("Need an OpenMediaVault host")
+        result = {"data": await omv_from(host).reboot()}
     elif atype == "webhook":
         url = action.get("url")
         if not url:
@@ -464,5 +540,8 @@ def inverse_action(action_type: str) -> str | None:
         "docker_stop": "docker_start",
         "docker_stop_stack": "docker_start_stack",
         "synology_stop_container": "synology_start_container",
+        "k3s_drain": "k3s_uncordon",
+        "k3s_shutdown_node": "wol",
+        "omv_shutdown": "wol",
         "stop": "start",
     }.get(action_type)
