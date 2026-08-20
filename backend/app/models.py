@@ -28,6 +28,19 @@ class Setting(Base):
     value_json: Mapped[str] = mapped_column(Text, default="null")
 
 
+class NotifyChannel(Base):
+    __tablename__ = "notify_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(20), default="discord")  # discord | ntfy | gotify | webhook
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    url: Mapped[str] = mapped_column(Text, default="")
+    topic: Mapped[str] = mapped_column(String(160), default="")
+    token_enc: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class UpsSource(Base):
     __tablename__ = "ups_sources"
 

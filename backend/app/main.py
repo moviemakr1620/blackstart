@@ -13,7 +13,7 @@ from app import __version__
 from app.config import settings as app_settings
 from app.db import SessionLocal, init_db
 from app.engine.service import engine
-from app.routers import auth, hosts, policies, runs, settings, targets, ups, ws
+from app.routers import auth, hosts, notify_channels, policies, runs, settings, targets, ups, ws
 from app.seed import seed_if_empty
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -55,6 +55,7 @@ app.include_router(targets.router)
 app.include_router(policies.router)
 app.include_router(runs.router)
 app.include_router(settings.router)
+app.include_router(notify_channels.router)
 app.include_router(ws.router)
 
 

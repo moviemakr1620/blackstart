@@ -2,8 +2,8 @@ import { Copy, Plus, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useFeedback } from "../feedback";
-import { ACTIONS, actionLabel, TRIGGERS, triggerLabel } from "../labels";
-import type { Host, Policy, PolicyStep, Target } from "../types";
+import { ACTIONS, actionLabel, actionMeta, CATEGORIES, categoryOf, TRIGGERS, triggerLabel } from "../labels";
+import type { Host, NotifyChannel, Policy, PolicyStep, Target } from "../types";
 
 function triggerSelectValue(step: PolicyStep) {
   if (step.trigger.all) return "online_and_battery";
@@ -19,6 +19,42 @@ function applyTriggerType(type: string, prev: PolicyStep["trigger"]): PolicyStep
     };
   }
   return { ...prev, type, all: undefined };
+}
+
+function matchingInventory(
+  actionType: string,
+  targets: Target[],
+  hosts: Host[],
+): { kind: "none" | "notify" | "target" | "host"; targets: Target[]; hosts: Host[] } {
+  const meta = actionMeta(actionType);
+  const want = meta?.target || "none";
+  if (want === "none" || want === "notify") return { kind: want, targets: [], hosts: [] };
+  if (want === "vm") return { kind: "target", targets: targets.filter((t) => t.kind === "vm" || t.kind === "lxc"), hosts: [] };
+  if (want === "container") {
+    const syno = actionType.startsWith("synology");
+    return {
+      kind: "target",
+      targets: targets.filter(
+        (t) => t.kind === "container" && (syno ? t.host_kind === "synology" : t.host_kind !== "synology"),
+      ),
+      hosts: [],
+    };
+  }
+  if (want === "stack") return { kind: "target", targets: targets.filter((t) => t.kind === "stack"), hosts: [] };
+  if (want === "nas") return { kind: "target", targets: targets.filter((t) => t.kind === "nas" || t.host_kind === "synology"), hosts: [] };
+  if (want === "proxmox-host") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "proxmox") };
+  if (want === "host") {
+    if (actionType === "ssh") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "ssh" || h.kind === "docker") };
+    return { kind: "host", targets: [], hosts };
+  }
+  if (want === "wol") {
+    return {
+      kind: "target",
+      targets: targets.filter((t) => t.kind === "nas" || t.kind === "host" || Boolean(t.extra?.mac) || Boolean(t.extra?.mac_passive)),
+      hosts: [],
+    };
+  }
+  return { kind: "target", targets, hosts: [] };
 }
 
 const emptyStep = (order: number): PolicyStep => ({
@@ -37,6 +73,7 @@ export function Playbooks() {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [channels, setChannels] = useState<NotifyChannel[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
   const [tab, setTab] = useState<"shed" | "restore">("shed");
@@ -44,14 +81,16 @@ export function Playbooks() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    const [p, t, h] = await Promise.all([
+    const [p, t, h, c] = await Promise.all([
       api.get<Policy[]>("/api/policies"),
       api.get<Target[]>("/api/targets"),
       api.get<Host[]>("/api/hosts"),
+      api.get<NotifyChannel[]>("/api/notify-channels"),
     ]);
     setPolicies(p);
     setTargets(t);
     setHosts(h);
+    setChannels(c);
     const first = p.find((x) => x.kind === tab) || p[0];
     if (first && (!activeId || !p.some((x) => x.id === activeId))) {
       setActiveId(first.id);
@@ -181,6 +220,13 @@ export function Playbooks() {
   const list = policies.filter((p) => p.kind === tab);
   const dockerish = (t: string | undefined) =>
     ["docker_stop", "docker_start", "docker_stop_stack", "docker_start_stack"].includes(t || "");
+
+  function setCategory(idx: number, category: string, step: PolicyStep) {
+    const first = ACTIONS.find((a) => a.category === category);
+    if (!first) return;
+    if (actionMeta(step.action.type)?.category === category) return;
+    updateStep(idx, { action: { type: first.value, message: step.action.message } });
+  }
 
   return (
     <div className="p-6 space-y-5">
@@ -389,15 +435,29 @@ export function Playbooks() {
                     </div>
                   </div>
 
-                  <div className="grid md:grid-cols-3 gap-3">
+                  <div className="grid md:grid-cols-4 gap-3">
                     <div className="space-y-1">
-                      <label>Do</label>
+                      <label>Category</label>
+                      <select
+                        className="w-full"
+                        value={categoryOf(step.action.type)}
+                        onChange={(e) => setCategory(idx, e.target.value, step)}
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label>Action</label>
                       <select
                         className="w-full"
                         value={step.action.type || "notify"}
-                        onChange={(e) => updateStep(idx, { action: { ...step.action, type: e.target.value } })}
+                        onChange={(e) => updateStep(idx, { action: { type: e.target.value, message: step.action.message } })}
                       >
-                        {ACTIONS.map((t) => (
+                        {ACTIONS.filter((a) => a.category === categoryOf(step.action.type)).map((t) => (
                           <option key={t.value} value={t.value}>
                             {t.label}
                           </option>
@@ -406,23 +466,84 @@ export function Playbooks() {
                       {actionHelp && <p className="text-[11px] text-slate-500">{actionHelp}</p>}
                     </div>
                     <div className="space-y-1">
-                      <label>Target from inventory</label>
-                      <select
-                        className="w-full"
-                        value={step.action.target_id ?? ""}
-                        onChange={(e) =>
-                          updateStep(idx, {
-                            action: { ...step.action, target_id: e.target.value ? Number(e.target.value) : null },
-                          })
+                      <label>Target</label>
+                      {actionMeta(step.action.type)?.target === "none" && (
+                        <div className="text-sm text-slate-500 py-2">No target needed</div>
+                      )}
+                      {actionMeta(step.action.type)?.target === "notify" && (
+                        <select
+                          className="w-full"
+                          value={step.action.channel_id ?? "all"}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            updateStep(idx, {
+                              action: {
+                                ...step.action,
+                                channel_id: v === "all" ? "all" : Number(v),
+                                target_id: null,
+                              },
+                            });
+                          }}
+                        >
+                          <option value="all">All enabled channels</option>
+                          {channels.map((ch) => (
+                            <option key={ch.id} value={ch.id}>
+                              {ch.name} ({ch.kind})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {(() => {
+                        const match = matchingInventory(step.action.type || "", targets, hosts);
+                        if (match.kind === "target") {
+                          return (
+                            <select
+                              className="w-full"
+                              value={step.action.target_id ?? ""}
+                              onChange={(e) =>
+                                updateStep(idx, {
+                                  action: {
+                                    ...step.action,
+                                    target_id: e.target.value ? Number(e.target.value) : null,
+                                  },
+                                })
+                              }
+                            >
+                              <option value="">— pick a target —</option>
+                              {match.targets.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name} ({t.kind}{t.host_name ? ` · ${t.host_name}` : ""})
+                                </option>
+                              ))}
+                            </select>
+                          );
                         }
-                      >
-                        <option value="">— none —</option>
-                        {targets.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.name} ({t.kind} on {t.host_name || "—"})
-                          </option>
-                        ))}
-                      </select>
+                        if (match.kind === "host") {
+                          return (
+                            <select
+                              className="w-full"
+                              value={step.action.host_id ?? ""}
+                              onChange={(e) =>
+                                updateStep(idx, {
+                                  action: {
+                                    ...step.action,
+                                    host_id: e.target.value ? Number(e.target.value) : null,
+                                    target_id: null,
+                                  },
+                                })
+                              }
+                            >
+                              <option value="">— pick a host —</option>
+                              {match.hosts.map((h) => (
+                                <option key={h.id} value={h.id}>
+                                  {h.name} ({h.kind})
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                     <div className="space-y-1">
                       <label>Delay before this step (seconds)</label>

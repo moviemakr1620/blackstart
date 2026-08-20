@@ -110,7 +110,13 @@ async def test_host(
         if row.kind == "proxmox":
             info = {"version": await proxmox_from(row).version()}
         elif row.kind == "synology":
-            info = {"info": await synology_from(row).ping()}
+            ping = await synology_from(row).ping()
+            extra = json.loads(row.extra_json or "{}")
+            if not isinstance(extra, dict):
+                extra = {}
+            extra["ha"] = bool(ping.get("ha"))
+            row.extra_json = json.dumps(extra)
+            info = {"info": ping}
         elif row.kind == "docker":
             if uses_ssh_docker(row):
                 info = await docker_via_ssh(row, "docker info --format '{{.ServerVersion}}'")

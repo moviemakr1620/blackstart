@@ -6,9 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Host, Policy, PolicyStep, Target, UpsSource, User
+from app.models import Host, NotifyChannel, Policy, PolicyStep, Setting, Target, UpsSource, User
 from app.security import encrypt_secret, hash_password
-from app.store import put_setting
+from app.store import get_settings_map, put_setting
 
 
 def _trigger(**kwargs) -> str:
@@ -296,8 +296,21 @@ async def seed_if_empty(session: AsyncSession) -> None:
             ]
         )
 
-    from app.models import Setting
-
     if await session.get(Setting, "live_actions") is None:
         await put_setting(session, "live_actions", bool(settings.live_actions))
+
+    channel_count = (await session.execute(select(func.count()).select_from(NotifyChannel))).scalar() or 0
+    if channel_count == 0:
+        cfg = await get_settings_map(session)
+        if cfg.get("notify_url") and cfg.get("notify_kind") not in (None, "", "none"):
+            session.add(
+                NotifyChannel(
+                    name=str(cfg.get("notify_kind") or "Discord").title(),
+                    kind=str(cfg.get("notify_kind") or "discord"),
+                    enabled=True,
+                    url=str(cfg.get("notify_url") or ""),
+                    topic=str(cfg.get("ntfy_topic") or ""),
+                    token_enc=encrypt_secret(str(cfg.get("gotify_token") or "")) if cfg.get("gotify_token") else "",
+                )
+            )
     await session.commit()

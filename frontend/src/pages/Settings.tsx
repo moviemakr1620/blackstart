@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AppSettings, UpsSource } from "../types";
+import type { AppSettings, NotifyChannel, UpsSource } from "../types";
 
 const emptySrc = {
   name: "PeaNUT",
@@ -23,14 +23,26 @@ export function Settings() {
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
   const [src, setSrc] = useState(emptySrc);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [channels, setChannels] = useState<NotifyChannel[]>([]);
+  const [chForm, setChForm] = useState({
+    name: "Discord",
+    kind: "discord" as NotifyChannel["kind"],
+    url: "",
+    topic: "",
+    token: "",
+    enabled: true,
+  });
+  const [editingChannelId, setEditingChannelId] = useState<number | null>(null);
 
   async function load() {
-    const [s, u] = await Promise.all([
+    const [s, u, c] = await Promise.all([
       api.get<AppSettings>("/api/settings"),
       api.get<UpsSource[]>("/api/ups/sources"),
+      api.get<NotifyChannel[]>("/api/notify-channels"),
     ]);
     setSettings(s);
     setSources(u);
+    setChannels(c);
   }
 
   useEffect(() => {
@@ -181,20 +193,82 @@ export function Settings() {
       </section>
 
       <section className="card p-5 space-y-4">
-        <h2 className="font-medium">Notifications</h2>
+        <h2 className="font-medium">Notification channels</h2>
         <p className="text-sm text-slate-500">
-          Playbook “Send notification” uses this channel. Discord wants a webhook URL from Server Settings →
-          Integrations → Webhooks. Blackstart sends Discord the format it expects (`content`), not a generic JSON blob.
+          Add as many as you want — Discord, ntfy, Gotify, or a generic webhook. Playbook notify steps pick a channel
+          (or all of them).
         </p>
-        <div className="grid md:grid-cols-2 gap-3">
+        <div className="space-y-2">
+          {channels.length === 0 && <div className="text-sm text-slate-500">No channels yet.</div>}
+          {channels.map((ch) => (
+            <div key={ch.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-ink-900/70 px-3 py-2">
+              <div>
+                <div className="text-sm">
+                  {ch.name} <span className="text-slate-500">({ch.kind})</span>
+                  {!ch.enabled && <span className="text-amber text-xs ml-2">off</span>}
+                </div>
+                <div className="text-[11px] text-slate-500 mono truncate max-w-md">{ch.url || ch.topic || "—"}</div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn-ghost"
+                  onClick={() => {
+                    setEditingChannelId(ch.id);
+                    setChForm({
+                      name: ch.name,
+                      kind: ch.kind,
+                      url: ch.url,
+                      topic: ch.topic,
+                      token: "",
+                      enabled: ch.enabled,
+                    });
+                  }}
+                >
+                  Edit
+                </button>
+                <button
+                  className="btn-ghost"
+                  onClick={async () => {
+                    try {
+                      await api.post(`/api/notify-channels/${ch.id}/test`);
+                      setMsg(`Test sent to ${ch.name}.`);
+                      setErr("");
+                    } catch (e) {
+                      setErr(e instanceof Error ? e.message : "Test failed");
+                    }
+                  }}
+                >
+                  Test
+                </button>
+                <button
+                  className="btn-danger"
+                  onClick={async () => {
+                    await api.del(`/api/notify-channels/${ch.id}`);
+                    if (editingChannelId === ch.id) setEditingChannelId(null);
+                    await load();
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="text-sm text-slate-300">
+          {editingChannelId ? `Editing channel #${editingChannelId}` : "Add a channel"}
+        </div>
+        <div className="grid md:grid-cols-3 gap-3">
+          <div className="space-y-1">
+            <label>Name</label>
+            <input className="w-full" value={chForm.name} onChange={(e) => setChForm({ ...chForm, name: e.target.value })} />
+          </div>
           <div className="space-y-1">
             <label>Kind</label>
             <select
               className="w-full"
-              value={settings.notify_kind}
-              onChange={(e) => saveSettings({ notify_kind: e.target.value })}
+              value={chForm.kind}
+              onChange={(e) => setChForm({ ...chForm, kind: e.target.value as NotifyChannel["kind"] })}
             >
-              <option value="none">Off</option>
               <option value="discord">Discord webhook</option>
               <option value="ntfy">ntfy</option>
               <option value="gotify">Gotify</option>
@@ -202,51 +276,66 @@ export function Settings() {
             </select>
           </div>
           <div className="space-y-1">
-            <label>{settings.notify_kind === "discord" ? "Discord webhook URL" : "URL"}</label>
+            <label>URL</label>
             <input
               className="w-full"
-              value={settings.notify_url}
+              value={chForm.url}
               placeholder="https://discord.com/api/webhooks/…"
-              onChange={(e) => setSettings({ ...settings, notify_url: e.target.value })}
-              onBlur={() => saveSettings({ notify_url: settings.notify_url })}
+              onChange={(e) => setChForm({ ...chForm, url: e.target.value })}
             />
           </div>
-          <div className="space-y-1">
-            <label>ntfy topic</label>
-            <input
-              className="w-full"
-              value={settings.ntfy_topic}
-              onChange={(e) => setSettings({ ...settings, ntfy_topic: e.target.value })}
-              onBlur={() => saveSettings({ ntfy_topic: settings.ntfy_topic })}
-            />
-          </div>
-          <div className="space-y-1">
-            <label>Gotify token</label>
-            <input
-              className="w-full"
-              type="password"
-              value={settings.gotify_token}
-              onChange={(e) => setSettings({ ...settings, gotify_token: e.target.value })}
-              onBlur={() => saveSettings({ gotify_token: settings.gotify_token })}
-            />
-          </div>
+          {chForm.kind === "ntfy" && (
+            <div className="space-y-1">
+              <label>ntfy topic</label>
+              <input className="w-full" value={chForm.topic} onChange={(e) => setChForm({ ...chForm, topic: e.target.value })} />
+            </div>
+          )}
+          {chForm.kind === "gotify" && (
+            <div className="space-y-1">
+              <label>Token {editingChannelId ? "(blank = keep)" : ""}</label>
+              <input className="w-full" type="password" value={chForm.token} onChange={(e) => setChForm({ ...chForm, token: e.target.value })} />
+            </div>
+          )}
+          <label className="flex items-center gap-2 text-sm normal-case tracking-normal mt-6">
+            <input type="checkbox" checked={chForm.enabled} onChange={(e) => setChForm({ ...chForm, enabled: e.target.checked })} />
+            Enabled
+          </label>
         </div>
-        <button
-          className="btn-primary"
-          onClick={async () => {
-            try {
-              await api.post("/api/settings/test-notify", {
-                message: "If you see this, notifications are working.",
-              });
-              setMsg("Test notification sent. Check Discord.");
-              setErr("");
-            } catch (e) {
-              setErr(e instanceof Error ? e.message : "Test notify failed");
-            }
-          }}
-        >
-          Send test notification
-        </button>
+        <div className="flex gap-2">
+          <button
+            className="btn-primary"
+            onClick={async () => {
+              try {
+                if (editingChannelId) {
+                  await api.put(`/api/notify-channels/${editingChannelId}`, chForm);
+                  setMsg("Channel updated.");
+                } else {
+                  await api.post("/api/notify-channels", chForm);
+                  setMsg("Channel added.");
+                }
+                setEditingChannelId(null);
+                setChForm({ name: "Discord", kind: "discord", url: "", topic: "", token: "", enabled: true });
+                setErr("");
+                await load();
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : "Could not save channel");
+              }
+            }}
+          >
+            {editingChannelId ? "Save channel" : "Add channel"}
+          </button>
+          {editingChannelId && (
+            <button
+              className="btn-ghost"
+              onClick={() => {
+                setEditingChannelId(null);
+                setChForm({ name: "Discord", kind: "discord", url: "", topic: "", token: "", enabled: true });
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="card p-5 space-y-4">

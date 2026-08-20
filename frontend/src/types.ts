@@ -93,6 +93,7 @@ export type Action = {
   container?: string;
   stack?: string;
   name?: string;
+  channel_id?: number | "all" | null;
 };
 
 export type PolicyStep = {
@@ -144,6 +145,16 @@ export type Episode = {
   cause: string;
   status: string;
   min_charge?: number | null;
+};
+
+export type NotifyChannel = {
+  id: number;
+  name: string;
+  kind: "discord" | "ntfy" | "gotify" | "webhook";
+  enabled: boolean;
+  url: string;
+  topic: string;
+  has_token: boolean;
 };
 
 export type AppSettings = {

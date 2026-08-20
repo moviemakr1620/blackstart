@@ -18,6 +18,11 @@ const emptyHost = {
   password: "",
   private_key: "",
   access: "ssh",
+  ha: false,
+  mac: "",
+  mac_passive: "",
+  node_a: "",
+  node_b: "",
 };
 
 const emptyTarget = {
@@ -67,6 +72,11 @@ export function Inventory() {
       password: "",
       private_key: "",
       access: String(h.extra?.access || (h.kind === "docker" ? "ssh" : "api")),
+      ha: Boolean(h.extra?.ha),
+      mac: String(h.extra?.mac || ""),
+      mac_passive: String(h.extra?.mac_passive || ""),
+      node_a: String(h.extra?.node_a || ""),
+      node_b: String(h.extra?.node_b || ""),
     });
     setMsg(`Editing host “${h.name}”. Leave secrets blank to keep the current ones.`);
     setErr("");
@@ -106,6 +116,13 @@ export function Inventory() {
     if (hostForm.kind === "docker") {
       extra.access = hostForm.access;
       if (hostForm.address.startsWith("unix")) extra.socket = hostForm.address;
+    }
+    if (hostForm.kind === "synology") {
+      extra.ha = hostForm.ha;
+      extra.mac = hostForm.mac;
+      extra.mac_passive = hostForm.mac_passive;
+      extra.node_a = hostForm.node_a;
+      extra.node_b = hostForm.node_b;
     }
     const body = {
       name: hostForm.name,
@@ -269,6 +286,40 @@ export function Inventory() {
         </div>
         {HOST_KIND_HELP[hostForm.kind] && (
           <p className="text-xs text-slate-500">{HOST_KIND_HELP[hostForm.kind]}</p>
+        )}
+        {hostForm.kind === "synology" && (
+          <div className="space-y-3 rounded-xl bg-ink-900/60 p-4">
+            <label className="flex items-center gap-2 text-sm normal-case tracking-normal">
+              <input type="checkbox" checked={hostForm.ha} onChange={(e) => setHostForm({ ...hostForm, ha: e.target.checked })} />
+              This is a Synology High Availability cluster
+            </label>
+            <p className="text-xs text-slate-500">
+              Address should be the <strong>cluster virtual IP</strong>. Tick HA so shutdown uses the cluster API (and
+              both nodes if you fill physical IPs), and Wake on LAN sends a packet to each MAC.
+            </p>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label>{hostForm.ha ? "Active node MAC" : "MAC (for WOL)"}</label>
+                <input className="w-full" value={hostForm.mac} onChange={(e) => setHostForm({ ...hostForm, mac: e.target.value })} />
+              </div>
+              {hostForm.ha && (
+                <>
+                  <div className="space-y-1">
+                    <label>Passive node MAC</label>
+                    <input className="w-full" value={hostForm.mac_passive} onChange={(e) => setHostForm({ ...hostForm, mac_passive: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <label>Active node IP (optional)</label>
+                    <input className="w-full" value={hostForm.node_a} onChange={(e) => setHostForm({ ...hostForm, node_a: e.target.value })} placeholder="physical IP of node A" />
+                  </div>
+                  <div className="space-y-1">
+                    <label>Passive node IP (optional)</label>
+                    <input className="w-full" value={hostForm.node_b} onChange={(e) => setHostForm({ ...hostForm, node_b: e.target.value })} placeholder="physical IP of node B" />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         )}
         {hostForm.kind === "docker" && (
           <div className="space-y-1">

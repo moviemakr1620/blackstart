@@ -44,11 +44,11 @@ def proxmox_from(host: Host) -> ProxmoxAdapter:
     )
 
 
-def synology_from(host: Host) -> SynologyAdapter:
+def synology_from(host: Host, address: str | None = None) -> SynologyAdapter:
     c = _creds(host)
     extra = _extra(host)
     return SynologyAdapter(
-        address=host.address,
+        address=address or host.address,
         port=host.port or 5001,
         username=c.get("username") or "",
         password=c.get("password") or "",
@@ -56,6 +56,47 @@ def synology_from(host: Host) -> SynologyAdapter:
         verify_tls=host.verify_tls,
         use_https=extra.get("https", True),
     )
+
+
+def collect_macs(action: dict[str, Any], target: Target | None, host: Host | None) -> list[str]:
+    found: list[str] = []
+
+    def add(value: Any) -> None:
+        if not value:
+            return
+        if isinstance(value, list):
+            for v in value:
+                add(v)
+            return
+        for part in str(value).replace(";", ",").split(","):
+            m = part.strip()
+            if m and m.lower() not in {x.lower() for x in found}:
+                found.append(m)
+
+    add(action.get("mac"))
+    add(action.get("macs"))
+    if target:
+        extra = _extra(target)
+        add(extra.get("mac"))
+        add(extra.get("mac_passive"))
+        add(extra.get("mac_active"))
+        add(extra.get("macs"))
+    if host:
+        extra = _extra(host)
+        add(extra.get("mac"))
+        add(extra.get("mac_passive"))
+        add(extra.get("mac_active"))
+        add(extra.get("macs"))
+    return found
+
+
+def is_synology_ha(host: Host | None, target: Target | None) -> bool:
+    extras = []
+    if host:
+        extras.append(_extra(host))
+    if target:
+        extras.append(_extra(target))
+    return any(bool(e.get("ha") or e.get("mac_passive") or e.get("node_a") or e.get("node_b")) for e in extras)
 
 
 def uses_ssh_docker(host: Host) -> bool:
@@ -141,6 +182,7 @@ STOP_ACTIONS = {
     "docker_stop",
     "docker_stop_stack",
     "synology_shutdown",
+    "synology_ha_shutdown",
     "ssh",
     "shutdown",
     "stop",
@@ -170,6 +212,7 @@ async def execute_action(
         "docker_stop",
         "docker_stop_stack",
         "synology_shutdown",
+        "synology_ha_shutdown",
         "shutdown",
         "stop",
         "host_shutdown",
@@ -186,17 +229,65 @@ async def execute_action(
 
     result: dict[str, Any]
     if atype == "notify":
+        from sqlalchemy import select as sql_select
+
+        from app.models import NotifyChannel
+        from app.security import decrypt_secret
+
         cfg = notify_cfg or {}
-        result = await send_notification(
-            kind=action.get("kind") or cfg.get("notify_kind") or "webhook",
-            url=action.get("url") or cfg.get("notify_url") or "",
-            message=action.get("message") or "Blackstart event",
-            title=action.get("title") or "",
-            topic=action.get("topic") or cfg.get("ntfy_topic") or "",
-            token=action.get("token") or cfg.get("gotify_token") or "",
-        )
-        if result.get("skipped"):
-            raise ActionError(result.get("reason") or "notification was skipped")
+        message = action.get("message") or "Blackstart event"
+        title = action.get("title") or ""
+        channels: list[dict[str, Any]] = []
+        rows = (await session.execute(sql_select(NotifyChannel).where(NotifyChannel.enabled.is_(True)))).scalars().all()
+        cid = action.get("channel_id")
+        if rows:
+            if cid in (None, "", "all"):
+                chosen = list(rows)
+            else:
+                chosen = [r for r in rows if r.id == int(cid)]
+                if not chosen:
+                    raise ActionError(f"Notification channel {cid} not found or disabled")
+            for row in chosen:
+                channels.append(
+                    {
+                        "kind": row.kind,
+                        "url": row.url,
+                        "topic": row.topic,
+                        "token": decrypt_secret(row.token_enc),
+                        "name": row.name,
+                    }
+                )
+        elif cfg.get("notify_url"):
+            channels.append(
+                {
+                    "kind": cfg.get("notify_kind") or "webhook",
+                    "url": cfg.get("notify_url") or "",
+                    "topic": cfg.get("ntfy_topic") or "",
+                    "token": cfg.get("gotify_token") or "",
+                    "name": "default",
+                }
+            )
+        if not channels:
+            raise ActionError("No notification channels configured. Add one in Settings.")
+        sent = []
+        errors = []
+        for ch in channels:
+            try:
+                sent.append(
+                    await send_notification(
+                        kind=ch["kind"],
+                        url=ch["url"],
+                        message=message,
+                        title=title,
+                        topic=ch.get("topic") or "",
+                        token=ch.get("token") or "",
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{ch.get('name')}: {exc}")
+        if errors and not sent:
+            raise ActionError("; ".join(errors))
+        result = {"sent": sent, "errors": errors}
     elif atype == "wait":
         seconds = float(action.get("seconds") or 5)
         await asyncio.sleep(min(seconds, 3600))
@@ -228,11 +319,14 @@ async def execute_action(
             raise ActionError(f"{address}:{port} not reachable: {last_err}")
         result = {"reachable": f"{address}:{port}"}
     elif atype == "wol":
-        mac = action.get("mac") or (target and _extra(target).get("mac")) or (host and _extra(host).get("mac"))
-        if not mac:
-            raise ActionError("WOL requires a MAC address")
+        macs = collect_macs(action, target, host)
+        if not macs:
+            raise ActionError("WOL requires a MAC address (HA clusters need both node MACs)")
         broadcast = action.get("broadcast") or "255.255.255.255"
-        result = {"message": await wake_on_lan(str(mac), str(broadcast))}
+        notes = []
+        for mac in macs:
+            notes.append(await wake_on_lan(str(mac), str(broadcast)))
+        result = {"messages": notes, "macs": macs}
     elif atype in {"proxmox_shutdown", "proxmox_stop", "proxmox_start", "proxmox_reboot"}:
         if not host or not target:
             raise ActionError("Proxmox action needs a host and target")
@@ -296,10 +390,31 @@ async def execute_action(
         else:
             names = await docker_from(host).stack_action(str(project), verb)
             result = {"containers": names}
-    elif atype == "synology_shutdown":
+    elif atype in {"synology_shutdown", "synology_ha_shutdown"}:
         if not host:
             raise ActionError("Need a Synology host")
-        result = {"data": await synology_from(host).shutdown()}
+        extra = _extra(host)
+        if target:
+            extra = {**extra, **_extra(target)}
+        ha = is_synology_ha(host, target) or atype == "synology_ha_shutdown"
+        if ha:
+            notes: list[Any] = []
+            try:
+                notes.append(await synology_from(host).shutdown_cluster())
+            except Exception as exc:  # noqa: BLE001
+                notes.append({"cluster_api": str(exc)})
+            # Physical nodes: shut both so the passive cannot take over.
+            for key in ("node_a", "node_b", "passive_address"):
+                addr = extra.get(key)
+                if not addr or str(addr) == host.address:
+                    continue
+                try:
+                    notes.append({"node": addr, "data": await synology_from(host, str(addr)).shutdown()})
+                except Exception as exc:  # noqa: BLE001
+                    notes.append({"node": addr, "error": str(exc)})
+            result = {"ha": True, "steps": notes}
+        else:
+            result = {"data": await synology_from(host).shutdown()}
     elif atype in {"synology_start_container", "synology_stop_container"}:
         if not host or not target:
             raise ActionError("Need Synology host and container")
