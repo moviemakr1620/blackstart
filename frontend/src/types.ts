@@ -15,6 +15,7 @@ export type UpsStatus = {
   load_pct?: number | null;
   watts?: number | null;
   input_voltage?: number | null;
+  input_watts?: number | null;
   output_voltage?: number | null;
   temperature?: number | null;
   ts?: string;

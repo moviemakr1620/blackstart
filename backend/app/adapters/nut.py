@@ -188,8 +188,7 @@ def snapshot_from_vars(vars_: dict[str, Any]) -> dict[str, Any]:
     raw_status = str(_lookup(flat, "ups.status", "ups_status") or "")
     status, on_battery, charging = classify_status(raw_status)
     charge = _num(_lookup(flat, "battery.charge"))
-    runtime = _num(_lookup(flat, "battery.runtime", "battery.runtime.low"))
-    load = _num(_lookup(flat, "ups.load", "output.load", "ups.load.percent"))
+    runtime = _num(_lookup(flat, "battery.runtime"))
     watts = _num(
         _lookup(
             flat,
@@ -197,23 +196,40 @@ def snapshot_from_vars(vars_: dict[str, Any]) -> dict[str, Any]:
             "output.realpower",
             "ups.power",
             "output.power",
-            "ups.realpower.nominal",
         )
     )
-    if watts is None and load is not None:
-        nominal = _num(_lookup(flat, "ups.realpower.nominal", "ups.power.nominal", "output.realpower.nominal"))
-        if nominal:
-            watts = load / 100.0 * nominal
+    nominal = _num(
+        _lookup(
+            flat,
+            "ups.power.nominal",
+            "ups.realpower.nominal",
+            "output.realpower.nominal",
+        )
+    )
+    load = _num(_lookup(flat, "ups.load", "output.load", "ups.load.percent"))
+    # EcoFlow HID reports watts + rated watts, not a load percent.
+    if load is None and watts is not None and nominal and nominal > 0:
+        load = max(0.0, min(100.0, watts / nominal * 100.0))
+    if watts is None and load is not None and nominal:
+        watts = load / 100.0 * nominal
+
+    eco_runtime = _num(_lookup(flat, "experimental.ecoflow.battery.charge.runtime"))
+    if runtime is None:
+        # Prefer energy math when we have charge + rated Wh + live watts.
+        if charge is not None and nominal and watts and watts > 1:
+            runtime = (charge / 100.0) * nominal * 3600.0 / watts
+        elif eco_runtime is not None and 0 < eco_runtime < 7 * 24 * 3600:
+            runtime = eco_runtime
+
     input_voltage = _num(
         _lookup(
             flat,
             "input.voltage",
             "input.L1-N.voltage",
             "input.L1.voltage",
-            "input.voltage.nominal",
         )
     )
-    # EcoFlow HID often omits load/input. Keep the keys so the UI can say "not reported".
+    input_watts = _num(_lookup(flat, "input.realpower", "input.power"))
     return {
         "status_raw": raw_status,
         "status": status,
@@ -224,6 +240,7 @@ def snapshot_from_vars(vars_: dict[str, Any]) -> dict[str, Any]:
         "load_pct": load,
         "watts": watts,
         "input_voltage": input_voltage,
+        "input_watts": input_watts,
         "output_voltage": _num(_lookup(flat, "output.voltage", "output.L1-N.voltage")),
         "battery_voltage": _num(_lookup(flat, "battery.voltage")),
         "temperature": _num(_lookup(flat, "ups.temperature", "battery.temperature")),

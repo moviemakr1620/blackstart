@@ -135,19 +135,27 @@ export function Dashboard() {
           <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
             <Stat label="Runtime" value={formatRuntime(ups.runtime_sec)} />
             <Stat
-              label="Load"
+              label="Output"
               value={ups.watts != null ? `${Math.round(ups.watts)} W` : "Not reported"}
-              hint={ups.watts == null ? "EcoFlow HID often omits watts" : undefined}
             />
             <Stat
               label="UPS load"
               value={ups.load_pct != null ? `${Math.round(ups.load_pct)}%` : "Not reported"}
-              hint={ups.load_pct == null ? "Not in the NUT feed from PeaNUT" : undefined}
+              hint={
+                ups.load_pct != null && ups.watts != null
+                  ? "Computed from output watts / rated watts"
+                  : undefined
+              }
             />
             <Stat
               label="Input"
-              value={ups.input_voltage != null ? `${Math.round(ups.input_voltage)} V` : "Not reported"}
-              hint={ups.input_voltage == null ? "Often missing on EcoFlow HID" : undefined}
+              value={
+                ups.input_voltage != null
+                  ? `${Math.round(ups.input_voltage)} V`
+                  : ups.input_watts != null
+                    ? `${Math.round(ups.input_watts)} W`
+                    : "Not reported"
+              }
             />
           </div>
           {ups.reported_keys && ups.reported_keys.length > 0 && (
