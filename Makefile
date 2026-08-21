@@ -1,4 +1,4 @@
-.PHONY: dev backend frontend test build
+.PHONY: dev backend frontend test build ui
 
 backend:
 	cd backend && PYTHONPATH=. uvicorn app.main:app --reload --host 0.0.0.0 --port 8088
@@ -12,6 +12,11 @@ dev:
 
 test:
 	cd backend && PYTHONPATH=. pytest -q
+
+ui:
+	cd frontend && npm run build
+	rm -rf backend/static/*
+	cp -R frontend/dist/. backend/static/
 
 build:
 	docker compose build
