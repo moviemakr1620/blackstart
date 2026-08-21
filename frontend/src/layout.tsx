@@ -7,8 +7,11 @@ import {
   Server,
   Zap,
 } from "lucide-react";
+import { useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { setToken } from "./api";
+import { api, setToken } from "./api";
+import { setAppTimezone } from "./time";
+import type { AppSettings } from "./types";
 
 const links = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -20,6 +23,12 @@ const links = [
 
 export function Layout() {
   const navigate = useNavigate();
+  useEffect(() => {
+    api
+      .get<AppSettings>("/api/settings")
+      .then((s) => setAppTimezone(s.timezone || ""))
+      .catch(() => undefined);
+  }, []);
   return (
     <div className="min-h-screen grid grid-cols-[240px_1fr]">
       <aside className="border-r border-white/5 bg-ink-900/70 backdrop-blur px-4 py-6 flex flex-col">

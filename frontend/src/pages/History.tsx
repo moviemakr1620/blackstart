@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { formatDateTime, formatTime } from "../time";
 import type { Episode, Run, RunEvent } from "../types";
 
 export function History() {
@@ -50,7 +51,7 @@ export function History() {
                 #{e.id} · {e.cause} · {e.status}
               </div>
               <div className="text-slate-400">
-                {new Date(e.started_at).toLocaleString()}
+                {formatDateTime(e.started_at)}
                 {e.min_charge != null && <span className="ml-3">min {Math.round(e.min_charge)}%</span>}
               </div>
             </div>
@@ -91,7 +92,7 @@ export function History() {
                     <td className={r.status === "error" ? "text-rose" : r.status === "ok" ? "text-mint" : ""}>
                       {r.status}
                     </td>
-                    <td className="text-slate-400">{new Date(r.started_at).toLocaleString()}</td>
+                    <td className="text-slate-400">{formatDateTime(r.started_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -104,7 +105,7 @@ export function History() {
             {!detail && <div className="text-slate-500">Pick a run on the left.</div>}
             {detail?.events.map((e) => (
               <div key={e.id}>
-                <span className="text-slate-500">{new Date(e.ts).toLocaleTimeString()} </span>
+                <span className="text-slate-500">{formatTime(e.ts, true)} </span>
                 <span className={e.level === "error" ? "text-rose" : "text-mint"}>{e.level}</span> {e.message}
               </div>
             ))}

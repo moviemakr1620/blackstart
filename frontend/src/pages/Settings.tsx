@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { COMMON_TIMEZONES, browserTimezone, listTimezones, setAppTimezone } from "../time";
 import type { AppSettings, NotifyChannel, UpsSource } from "../types";
 
 const emptySrc = {
@@ -172,6 +173,37 @@ export function Settings() {
           />
           Pause the engine (stop evaluating playbooks)
         </label>
+        <div className="space-y-1 max-w-md">
+          <label>Timezone</label>
+          <select
+            className="w-full"
+            value={settings.timezone || ""}
+            onChange={(e) => {
+              const timezone = e.target.value;
+              setAppTimezone(timezone);
+              saveSettings({ timezone });
+            }}
+          >
+            <option value="">Browser local time ({browserTimezone()})</option>
+            <optgroup label="Common">
+              {COMMON_TIMEZONES.map((z) => (
+                <option key={`c-${z}`} value={z}>
+                  {z}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="All">
+              {listTimezones()
+                .filter((z) => !COMMON_TIMEZONES.includes(z))
+                .map((z) => (
+                  <option key={z} value={z}>
+                    {z}
+                  </option>
+                ))}
+            </optgroup>
+          </select>
+          <p className="text-xs text-slate-500">Dashboard chart, live log, and history timestamps. Stored data stays UTC.</p>
+        </div>
         <label className="flex items-center gap-3 text-sm normal-case tracking-normal">
           <input
             type="checkbox"

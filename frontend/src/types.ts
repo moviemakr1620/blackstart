@@ -173,6 +173,7 @@ export type AppSettings = {
   default_shed_hold_sec: number;
   protect_critical: boolean;
   primary_ups_id?: number | null;
+  timezone?: string;
 };
 
 export type Sample = {

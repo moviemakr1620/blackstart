@@ -42,3 +42,11 @@ def test_health_and_login_and_playbooks():
 
         sources = client.get("/api/ups/sources", headers=headers)
         assert any(s["kind"] == "simulator" for s in sources.json())
+
+        settings = client.get("/api/settings", headers=headers)
+        assert settings.status_code == 200
+        assert settings.json()["timezone"] == ""
+        saved = client.put("/api/settings", headers=headers, json={"timezone": "America/Los_Angeles"})
+        assert saved.status_code == 200
+        assert saved.json()["timezone"] == "America/Los_Angeles"
+        assert saved.json()["live_actions"] is False

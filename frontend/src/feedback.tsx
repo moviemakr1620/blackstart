@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { formatTime } from "./time";
 import type { Run, RunEvent } from "./types";
 
 type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
@@ -127,7 +128,7 @@ function RunPanel({ runId, title, onClose }: { runId: number; title: string; onC
           {!detail && <div className="text-slate-500">Loading run…</div>}
           {detail?.events.map((e) => (
             <div key={e.id} className="grid grid-cols-[70px_50px_1fr] gap-2">
-              <span className="text-slate-500">{new Date(e.ts).toLocaleTimeString()}</span>
+              <span className="text-slate-500">{formatTime(e.ts, true)}</span>
               <span className={e.level === "error" ? "text-rose" : e.level === "warn" ? "text-amber" : "text-mint"}>
                 {e.level}
               </span>

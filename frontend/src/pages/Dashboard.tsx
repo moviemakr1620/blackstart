@@ -9,6 +9,7 @@ import {
 } from "recharts";
 import { api, wsUrl } from "../api";
 import { BatteryRing, formatRuntime, statusLabel } from "../components/BatteryRing";
+import { formatDateTime, formatTime } from "../time";
 import type { AppSettings, Policy, Sample, UpsStatus } from "../types";
 
 export function Dashboard() {
@@ -240,15 +241,13 @@ export function Dashboard() {
                     domain={["dataMin", "dataMax"]}
                     stroke="#334"
                     tick={{ fill: "#7b8", fontSize: 11 }}
-                    tickFormatter={(v) =>
-                      new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    }
+                    tickFormatter={(v) => formatTime(v)}
                     minTickGap={40}
                   />
                   <YAxis domain={[0, 100]} stroke="#334" tick={{ fill: "#7b8", fontSize: 11 }} />
                   <Tooltip
                     contentStyle={{ background: "#121821", border: "1px solid #243040", borderRadius: 8 }}
-                    labelFormatter={(v) => new Date(Number(v)).toLocaleString()}
+                    labelFormatter={(v) => formatDateTime(Number(v))}
                     formatter={(value: number) => [`${Math.round(value)}%`, "Charge"]}
                   />
                   <Area type="monotone" dataKey="charge" stroke="#5ce1c5" fill="url(#g)" strokeWidth={2} />
@@ -311,7 +310,7 @@ export function Dashboard() {
           {events.length === 0 && <div className="text-slate-500">Waiting for events…</div>}
           {events.map((e) => (
             <div key={e.id} className="grid grid-cols-[150px_60px_1fr] gap-3">
-              <span className="text-slate-500">{new Date(e.ts).toLocaleString()}</span>
+              <span className="text-slate-500">{formatDateTime(e.ts)}</span>
               <span className={e.level === "error" ? "text-rose" : e.level === "warn" ? "text-amber" : "text-mint"}>
                 {e.level}
               </span>

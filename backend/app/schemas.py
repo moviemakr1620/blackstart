@@ -209,6 +209,7 @@ class AppSettingsOut(BaseModel):
     default_shed_hold_sec: int
     protect_critical: bool
     primary_ups_id: int | None = None
+    timezone: str = ""
 
 
 class AppSettingsIn(BaseModel):
@@ -224,6 +225,7 @@ class AppSettingsIn(BaseModel):
     default_shed_hold_sec: int | None = None
     protect_critical: bool | None = None
     primary_ups_id: int | None = None
+    timezone: str | None = None
 
 
 class SimulateIn(BaseModel):

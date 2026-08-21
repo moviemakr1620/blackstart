@@ -21,6 +21,7 @@ DEFAULTS: dict[str, Any] = {
     "default_shed_hold_sec": 15,
     "protect_critical": True,
     "primary_ups_id": None,
+    "timezone": "",
 }
 
 
