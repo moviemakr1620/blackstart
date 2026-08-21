@@ -202,6 +202,56 @@ def ssh_from(host: Host) -> SshAdapter:
     )
 
 
+async def _record_k3s_cluster_restore(
+    session: AsyncSession,
+    host: Host,
+    episode_id: int,
+    step_id: int | None,
+) -> None:
+    """Queue each discovered node so restore_auto can WOL (if MAC) then uncordon.
+
+    Workers are recorded first, control-plane last. restore_auto walks newest-first,
+    so the server is woken before the workers.
+    """
+    from sqlalchemy import select as sql_select
+
+    rows = (
+        (await session.execute(sql_select(Target).where(Target.host_id == host.id, Target.kind == "k3s_node")))
+        .scalars()
+        .all()
+    )
+    workers = [t for t in rows if not _extra(t).get("control_plane")]
+    servers = [t for t in rows if _extra(t).get("control_plane")]
+    ordered = workers + servers if (workers or servers) else list(rows)
+    if ordered:
+        for node in ordered:
+            session.add(
+                EpisodeAction(
+                    episode_id=episode_id,
+                    target_id=node.id,
+                    host_id=host.id,
+                    step_id=step_id,
+                    action="k3s_shutdown_node",
+                    success=True,
+                    restore_pending=True,
+                    detail="from cluster shutdown",
+                )
+            )
+        return
+    session.add(
+        EpisodeAction(
+            episode_id=episode_id,
+            target_id=None,
+            host_id=host.id,
+            step_id=step_id,
+            action="k3s_shutdown_cluster",
+            success=True,
+            restore_pending=True,
+            detail="cluster shutdown (no node targets discovered)",
+        )
+    )
+
+
 STOP_ACTIONS = {
     "proxmox_shutdown",
     "proxmox_stop",
@@ -209,6 +259,7 @@ STOP_ACTIONS = {
     "docker_stop_stack",
     "synology_shutdown",
     "synology_ha_shutdown",
+    "synology_stop_container",
     "k3s_shutdown_node",
     "k3s_shutdown_cluster",
     "k3s_drain",
@@ -483,7 +534,7 @@ async def execute_action(
         adapter = k3s_from(host)
         nodes = await adapter.nodes()
         notes = []
-        workers = [n for n in nodes if "control-plane" not in str(n.get("name"))]
+        workers = [n for n in nodes if not n.get("control_plane")]
         # Drain everyone, shut workers first, then remaining (server last).
         ordered = workers + [n for n in nodes if n not in workers]
         for n in ordered:
@@ -497,6 +548,58 @@ async def execute_action(
             except Exception as exc:  # noqa: BLE001
                 notes.append({"shutdown": addr, "error": str(exc)})
         result = {"nodes": notes}
+        if episode_id:
+            await _record_k3s_cluster_restore(session, host, episode_id, step_id)
+    elif atype == "k3s_wake_node":
+        if not host:
+            raise ActionError("k3s wake needs the control-plane host")
+        notes: list[Any] = []
+        macs = collect_macs(action, target, None)
+        for mac in macs:
+            notes.append(await wake_on_lan(str(mac)))
+        node = action.get("node") or (target.external_id if target else "") or (target.name if target else "")
+        if not node:
+            raise ActionError("Pick a k3s node")
+        try:
+            notes.append(await k3s_from(host).uncordon(str(node)))
+        except Exception as exc:  # noqa: BLE001
+            raise ActionError(
+                f"Uncordon failed ({exc}). For PoE Pis wait until the node is up, then run restore again."
+            ) from exc
+        result = {"steps": notes}
+    elif atype == "k3s_restore_cluster":
+        if not host:
+            raise ActionError("k3s cluster restore needs the control-plane host")
+        notes = []
+        macs = collect_macs(action, target, host)
+        from sqlalchemy import select as sql_select
+
+        node_targets = (
+            (await session.execute(sql_select(Target).where(Target.host_id == host.id, Target.kind == "k3s_node")))
+            .scalars()
+            .all()
+        )
+        for row in node_targets:
+            for mac in collect_macs({}, row, None):
+                if mac.lower() not in {m.lower() for m in macs}:
+                    macs.append(mac)
+        for mac in macs:
+            notes.append(await wake_on_lan(str(mac)))
+        try:
+            adapter = k3s_from(host)
+            live_nodes = await adapter.nodes()
+            for n in live_nodes:
+                try:
+                    notes.append({"uncordon": n["name"], "data": await adapter.uncordon(n["name"])})
+                except Exception as exc:  # noqa: BLE001
+                    notes.append({"uncordon": n["name"], "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            notes.append({"kubectl": str(exc)})
+            if not macs:
+                raise ActionError(
+                    f"Control plane is not up yet ({exc}). Wait for the Pis/PoE switch, then run restore again."
+                ) from exc
+        result = {"steps": notes}
     elif atype == "omv_shutdown":
         if not host:
             raise ActionError("Need an OpenMediaVault host")
@@ -518,11 +621,12 @@ async def execute_action(
     else:
         raise ActionError(f"Unknown action type: {atype}")
 
-    if episode_id and target and atype in STOP_ACTIONS:
+    if episode_id and atype in STOP_ACTIONS and atype != "k3s_shutdown_cluster" and (target or host):
         session.add(
             EpisodeAction(
                 episode_id=episode_id,
-                target_id=target.id,
+                target_id=target.id if target else None,
+                host_id=(host.id if host else None) or (target.host_id if target else None),
                 step_id=step_id,
                 action=atype,
                 success=True,
@@ -540,8 +644,11 @@ def inverse_action(action_type: str) -> str | None:
         "docker_stop": "docker_start",
         "docker_stop_stack": "docker_start_stack",
         "synology_stop_container": "synology_start_container",
+        "synology_shutdown": "wol",
+        "synology_ha_shutdown": "wol",
         "k3s_drain": "k3s_uncordon",
-        "k3s_shutdown_node": "wol",
+        "k3s_shutdown_node": "k3s_wake_node",
+        "k3s_shutdown_cluster": "k3s_restore_cluster",
         "omv_shutdown": "wol",
         "stop": "start",
     }.get(action_type)

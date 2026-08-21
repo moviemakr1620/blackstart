@@ -62,3 +62,12 @@ label {
 .mono {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
 }
+
+optgroup {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+th.sortable {
+  @apply cursor-pointer select-none hover:text-slate-300;
+}

@@ -194,6 +194,19 @@ async def discover_host(
         if key in index:
             index[key].last_status = str(item.get("last_status") or index[key].last_status)
             index[key].last_checked = utcnow()
+            incoming = item.get("extra") or {}
+            if incoming:
+                try:
+                    current = json.loads(index[key].extra_json or "{}")
+                except json.JSONDecodeError:
+                    current = {}
+                if not isinstance(current, dict):
+                    current = {}
+                for extra_key, extra_val in incoming.items():
+                    if extra_key in {"mac", "mac_passive", "mac_active", "macs"} and current.get(extra_key):
+                        continue
+                    current[extra_key] = extra_val
+                index[key].extra_json = json.dumps(current)
             continue
         if not import_new:
             continue

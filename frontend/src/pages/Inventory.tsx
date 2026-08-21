@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { ConfirmDialog } from "../confirm";
 import { useFeedback } from "../feedback";
 import { HOST_KIND_HELP } from "../labels";
 import type { Host, Target } from "../types";
+
+type SortKey = "name" | "kind" | "host" | "id";
+type PendingDelete =
+  | { kind: "host"; id: number; name: string; targetCount: number }
+  | { kind: "target"; id: number; name: string };
 
 const HOST_KINDS = ["proxmox", "synology", "docker", "k3s", "omv", "ssh"] as const;
 const TARGET_KINDS = ["vm", "lxc", "container", "stack", "nas", "k3s_node", "host", "custom"];
@@ -47,6 +53,13 @@ export function Inventory() {
   const [targetForm, setTargetForm] = useState(emptyTarget);
   const [editingHostId, setEditingHostId] = useState<number | null>(null);
   const [editingTargetId, setEditingTargetId] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [targetQuery, setTargetQuery] = useState("");
+  const [hostFilter, setHostFilter] = useState<number | "all">("all");
+  const [kindFilter, setKindFilter] = useState("all");
+  const [sortKey, setSortKey] = useState<SortKey>("host");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   async function load() {
     const [h, t] = await Promise.all([api.get<Host[]>("/api/hosts"), api.get<Target[]>("/api/targets")]);
@@ -211,6 +224,87 @@ export function Inventory() {
     }
   }
 
+  function requestDeleteHost(h: Host) {
+    setPendingDelete({
+      kind: "host",
+      id: h.id,
+      name: h.name,
+      targetCount: targets.filter((t) => t.host_id === h.id).length,
+    });
+  }
+
+  function requestDeleteTarget(t: Target) {
+    setPendingDelete({ kind: "target", id: t.id, name: t.name });
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setErr("");
+    try {
+      if (pendingDelete.kind === "host") {
+        await api.del(`/api/hosts/${pendingDelete.id}`);
+        if (editingHostId === pendingDelete.id) {
+          setEditingHostId(null);
+          setHostForm(emptyHost);
+        }
+        setMsg(`Deleted host “${pendingDelete.name}”.`);
+      } else {
+        await api.del(`/api/targets/${pendingDelete.id}`);
+        if (editingTargetId === pendingDelete.id) {
+          setEditingTargetId(null);
+          setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+        }
+        setMsg(`Deleted target “${pendingDelete.name}”.`);
+      }
+      setPendingDelete(null);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }
+
+  const targetKinds = useMemo(() => {
+    const set = new Set(targets.map((t) => t.kind));
+    return [...set].sort();
+  }, [targets]);
+
+  const visibleTargets = useMemo(() => {
+    const q = targetQuery.trim().toLowerCase();
+    const filtered = targets.filter((t) => {
+      if (hostFilter !== "all" && t.host_id !== hostFilter) return false;
+      if (kindFilter !== "all" && t.kind !== kindFilter) return false;
+      if (!q) return true;
+      const hay = `${t.name} ${t.kind} ${t.host_name || ""} ${t.external_id} ${t.notes || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+    const dir = sortDir === "asc" ? 1 : -1;
+    const value = (t: Target) => {
+      if (sortKey === "kind") return t.kind;
+      if (sortKey === "host") return t.host_name || "";
+      if (sortKey === "id") return t.external_id;
+      return t.name;
+    };
+    return [...filtered].sort((a, b) => {
+      const av = value(a);
+      const bv = value(b);
+      const cmp = av.localeCompare(bv, undefined, { sensitivity: "base", numeric: true });
+      if (cmp !== 0) return cmp * dir;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) * dir;
+    });
+  }, [targets, targetQuery, hostFilter, kindFilter, sortKey, sortDir]);
+
   async function toggleCritical(t: Target) {
     setErr("");
     try {
@@ -352,8 +446,10 @@ export function Inventory() {
         )}
         {hostForm.kind === "k3s" && (
           <p className="text-xs text-slate-500">
-            SSH to the control-plane Pi/VM (port 22). Discover lists nodes. Same SSH user/key is used to shut workers
-            down via their InternalIP.
+            SSH to one control-plane Pi (port 22) — you do not add every node as a host. Discover imports the rest of
+            the cluster as k3s_node targets. The same SSH user/key is used to drain and <code>shutdown -h now</code>{" "}
+            each node via its InternalIP. PoE hats typically power the Pi whenever the switch is up, so Wake on LAN is
+            optional: put a MAC on a node target only if you actually WOL it.
           </p>
         )}
         {hostForm.kind === "proxmox" ? (
@@ -430,21 +526,7 @@ export function Inventory() {
                   Discover
                 </button>
               )}
-              <button
-                className="btn-danger"
-                onClick={async () => {
-                  try {
-                    await api.del(`/api/hosts/${h.id}`);
-                    if (editingHostId === h.id) {
-                      setEditingHostId(null);
-                      setHostForm(emptyHost);
-                    }
-                    await load();
-                  } catch (e) {
-                    setErr(e instanceof Error ? e.message : "Delete failed");
-                  }
-                }}
-              >
+              <button className="btn-danger" onClick={() => requestDeleteHost(h)}>
                 Delete
               </button>
             </div>
@@ -486,7 +568,7 @@ export function Inventory() {
             <input className="w-full" value={targetForm.node} onChange={(e) => setTargetForm({ ...targetForm, node: e.target.value })} />
           </div>
           <div className="space-y-1">
-            <label>MAC (for WOL)</label>
+            <label>MAC (for WOL — optional on PoE)</label>
             <input className="w-full" value={targetForm.mac} onChange={(e) => setTargetForm({ ...targetForm, mac: e.target.value })} />
           </div>
           <label className="flex items-center gap-2 text-sm normal-case tracking-normal mt-6">
@@ -517,19 +599,74 @@ export function Inventory() {
       </section>
 
       <section className="card overflow-hidden">
+        <div className="flex flex-wrap items-end gap-3 p-4 border-b border-white/5">
+          <div className="space-y-1 flex-1 min-w-[180px]">
+            <label>Filter</label>
+            <input
+              className="w-full"
+              placeholder="Name, host, id…"
+              value={targetQuery}
+              onChange={(e) => setTargetQuery(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1 min-w-[160px]">
+            <label>Host</label>
+            <select
+              className="w-full"
+              value={hostFilter === "all" ? "all" : String(hostFilter)}
+              onChange={(e) => setHostFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
+            >
+              <option value="all">All hosts</option>
+              {hosts.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1 min-w-[140px]">
+            <label>Kind</label>
+            <select className="w-full" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
+              <option value="all">All kinds</option>
+              {targetKinds.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="text-xs text-slate-500 pb-2">
+            {visibleTargets.length} of {targets.length}
+          </div>
+        </div>
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase tracking-[0.16em] text-slate-500 bg-ink-900/60">
             <tr>
-              <th className="px-4 py-3">Target</th>
-              <th>Kind</th>
-              <th>Host</th>
-              <th>Id</th>
+              <th className="px-4 py-3 sortable" onClick={() => toggleSort("name")}>
+                Target{sortKey === "name" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+              </th>
+              <th className="sortable" onClick={() => toggleSort("kind")}>
+                Kind{sortKey === "kind" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+              </th>
+              <th className="sortable" onClick={() => toggleSort("host")}>
+                Host{sortKey === "host" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+              </th>
+              <th className="sortable" onClick={() => toggleSort("id")}>
+                Id{sortKey === "id" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+              </th>
               <th>Flags</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {targets.map((t) => (
+            {visibleTargets.length === 0 && (
+              <tr>
+                <td className="px-4 py-6 text-slate-500" colSpan={6}>
+                  {targets.length === 0 ? "No targets yet. Add a host and click Discover." : "No targets match these filters."}
+                </td>
+              </tr>
+            )}
+            {visibleTargets.map((t) => (
               <tr key={t.id} className="border-t border-white/5">
                 <td className="px-4 py-3">
                   <div>{t.name}</div>
@@ -556,21 +693,7 @@ export function Inventory() {
                     <button className="btn-ghost" onClick={() => act(t.id, guessStart(t), true)}>
                       Dry start
                     </button>
-                    <button
-                      className="btn-danger"
-                      onClick={async () => {
-                        try {
-                          await api.del(`/api/targets/${t.id}`);
-                          if (editingTargetId === t.id) {
-                            setEditingTargetId(null);
-                            setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
-                          }
-                          await load();
-                        } catch (e) {
-                          setErr(e instanceof Error ? e.message : "Delete failed");
-                        }
-                      }}
-                    >
+                    <button className="btn-danger" onClick={() => requestDeleteTarget(t)}>
                       Delete
                     </button>
                   </div>
@@ -580,6 +703,21 @@ export function Inventory() {
           </tbody>
         </table>
       </section>
+      {pendingDelete && (
+        <ConfirmDialog
+          title={pendingDelete.kind === "host" ? `Delete host “${pendingDelete.name}”?` : `Delete target “${pendingDelete.name}”?`}
+          body={
+            pendingDelete.kind === "host"
+              ? pendingDelete.targetCount
+                ? `This also deletes ${pendingDelete.targetCount} target${pendingDelete.targetCount === 1 ? "" : "s"} on this host. Playbook steps that pointed here will need a new target. This cannot be undone.`
+                : "Playbook steps that pointed at this host will need a new host. This cannot be undone."
+              : "Playbook steps that pointed at this target will need a new one. This cannot be undone."
+          }
+          busy={deleting}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
     </div>
   );
 }

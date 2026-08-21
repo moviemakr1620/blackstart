@@ -446,13 +446,15 @@ class Engine:
                     break
                 target = await session.get(Target, rec.target_id) if rec.target_id else None
                 inverse = inverse_action(rec.action)
-                if not inverse or not target:
+                host = None
+                host_id = rec.host_id or (target.host_id if target else None)
+                if host_id:
+                    host = await session.get(HostModel, host_id)
+                if not inverse or (not target and not host):
                     rec.restore_pending = False
                     continue
-                await self._log(session, run, "info", f"Auto-restore {target.name} via {inverse}")
-                host = target.host if target else None
-                if host is None and target and target.host_id:
-                    host = await session.get(HostModel, target.host_id)
+                label = target.name if target else host.name if host else inverse
+                await self._log(session, run, "info", f"Auto-restore {label} via {inverse}")
                 try:
                     result = await execute_action(
                         session,
@@ -466,9 +468,9 @@ class Engine:
                         episode_id=episode.id,
                     )
                     rec.restore_pending = False
-                    await self._log(session, run, "info", f"Restored {target.name}", result)
+                    await self._log(session, run, "info", f"Restored {label}", result)
                 except Exception as exc:  # noqa: BLE001
-                    await self._log(session, run, "error", f"Failed to restore {target.name}: {exc}")
+                    await self._log(session, run, "error", f"Failed to restore {label}: {exc}")
             if run.status != "aborted":
                 run.status = "ok"
         except Exception as exc:  # noqa: BLE001

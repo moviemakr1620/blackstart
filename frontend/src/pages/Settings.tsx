@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { ConfirmDialog } from "../confirm";
 import { COMMON_TIMEZONES, browserTimezone, listTimezones, setAppTimezone } from "../time";
 import type { AppSettings, NotifyChannel, UpsSource } from "../types";
+
+type PendingDelete =
+  | { kind: "channel"; id: number; name: string }
+  | { kind: "ups"; id: number; name: string };
 
 const emptySrc = {
   name: "PeaNUT",
@@ -34,6 +39,8 @@ export function Settings() {
     enabled: true,
   });
   const [editingChannelId, setEditingChannelId] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   async function load() {
     const [s, u, c] = await Promise.all([
@@ -120,6 +127,29 @@ export function Settings() {
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not set primary UPS");
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setErr("");
+    try {
+      if (pendingDelete.kind === "channel") {
+        await api.del(`/api/notify-channels/${pendingDelete.id}`);
+        if (editingChannelId === pendingDelete.id) setEditingChannelId(null);
+        setMsg(`Deleted channel “${pendingDelete.name}”.`);
+      } else {
+        await api.del(`/api/ups/sources/${pendingDelete.id}`);
+        if (editingId === pendingDelete.id) resetForm();
+        setMsg(`Deleted UPS “${pendingDelete.name}”.`);
+      }
+      setPendingDelete(null);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -282,14 +312,7 @@ export function Settings() {
                 >
                   Test
                 </button>
-                <button
-                  className="btn-danger"
-                  onClick={async () => {
-                    await api.del(`/api/notify-channels/${ch.id}`);
-                    if (editingChannelId === ch.id) setEditingChannelId(null);
-                    await load();
-                  }}
-                >
+                <button className="btn-danger" onClick={() => setPendingDelete({ kind: "channel", id: ch.id, name: ch.name })}>
                   Delete
                 </button>
               </div>
@@ -416,15 +439,7 @@ export function Settings() {
                 </button>
                 <button
                   className="btn-danger"
-                  onClick={async () => {
-                    try {
-                      await api.del(`/api/ups/sources/${s.id}`);
-                      if (editingId === s.id) resetForm();
-                      await load();
-                    } catch (e) {
-                      setErr(e instanceof Error ? e.message : "Delete failed");
-                    }
-                  }}
+                  onClick={() => setPendingDelete({ kind: "ups", id: s.id, name: s.name })}
                 >
                   Delete
                 </button>
@@ -520,6 +535,23 @@ export function Settings() {
           Update password
         </button>
       </section>
+      {pendingDelete && (
+        <ConfirmDialog
+          title={
+            pendingDelete.kind === "channel"
+              ? `Delete notification channel “${pendingDelete.name}”?`
+              : `Delete UPS “${pendingDelete.name}”?`
+          }
+          body={
+            pendingDelete.kind === "channel"
+              ? "Playbook notify steps that picked this channel will need a new one. This cannot be undone."
+              : "Playbooks assigned to this UPS will need a new source. This cannot be undone."
+          }
+          busy={deleting}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
     </div>
   );
 }

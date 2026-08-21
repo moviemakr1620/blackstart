@@ -40,7 +40,23 @@ class K3sAdapter:
             for cond in status.get("conditions") or []:
                 if cond.get("type") == "Ready" and str(cond.get("status")).lower() == "true":
                     ready = True
-            out.append({"name": name, "address": address, "ready": ready})
+            labels = meta.get("labels") or {}
+            control_plane = any(
+                key in labels
+                for key in (
+                    "node-role.kubernetes.io/control-plane",
+                    "node-role.kubernetes.io/master",
+                    "node-role.kubernetes.io/etcd",
+                )
+            )
+            out.append(
+                {
+                    "name": name,
+                    "address": address,
+                    "ready": ready,
+                    "control_plane": control_plane,
+                }
+            )
         return out
 
     async def drain(self, node: str) -> dict[str, Any]:
@@ -73,7 +89,11 @@ class K3sAdapter:
                     "kind": "k3s_node",
                     "name": n["name"],
                     "external_id": n["name"],
-                    "extra": {"address": n.get("address"), "ready": n.get("ready")},
+                    "extra": {
+                        "address": n.get("address"),
+                        "ready": n.get("ready"),
+                        "control_plane": bool(n.get("control_plane")),
+                    },
                     "last_status": "Ready" if n.get("ready") else "NotReady",
                 }
             )

@@ -38,3 +38,7 @@ async def init_db() -> None:
             await conn.exec_driver_sql("ALTER TABLE policies ADD COLUMN ups_source_id INTEGER")
         except Exception:
             pass
+        try:
+            await conn.exec_driver_sql("ALTER TABLE episode_actions ADD COLUMN host_id INTEGER")
+        except Exception:
+            pass

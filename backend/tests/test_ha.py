@@ -1,4 +1,4 @@
-from app.engine.executor import collect_macs, is_synology_ha
+from app.engine.executor import collect_macs, inverse_action, is_synology_ha
 
 
 class Fake:
@@ -18,3 +18,11 @@ def test_is_synology_ha():
     host = Fake('{"ha": true}')
     assert is_synology_ha(host, None)  # type: ignore[arg-type]
     assert not is_synology_ha(Fake("{}"), None)  # type: ignore[arg-type]
+
+
+def test_inverse_action_host_level():
+    assert inverse_action("synology_shutdown") == "wol"
+    assert inverse_action("k3s_shutdown_node") == "k3s_wake_node"
+    assert inverse_action("k3s_shutdown_cluster") == "k3s_restore_cluster"
+    assert inverse_action("k3s_drain") == "k3s_uncordon"
+    assert inverse_action("docker_stop_stack") == "docker_start_stack"

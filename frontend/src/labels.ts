@@ -37,7 +37,7 @@ export const ACTIONS: {
   { value: "docker_start", label: "Start container", help: "Start one container.", category: "docker", target: "container" },
   { value: "docker_stop_stack", label: "Stop compose stack", help: "Stop a compose project.", category: "docker", target: "stack" },
   { value: "docker_start_stack", label: "Start compose stack", help: "Start a compose project.", category: "docker", target: "stack" },
-  { value: "synology_shutdown", label: "Shut down NAS / HA cluster", help: "Standalone DSM, or the whole SHA cluster if HA is enabled.", category: "synology", target: "nas" },
+  { value: "synology_shutdown", label: "Shut down NAS / HA cluster", help: "Picks a Synology host. Standalone DSM, or the whole SHA cluster if HA is enabled on that host.", category: "synology", target: "host" },
   { value: "synology_stop_container", label: "Stop container", help: "Via DSM Container Manager.", category: "synology", target: "container" },
   { value: "synology_start_container", label: "Start container", help: "Via DSM Container Manager.", category: "synology", target: "container" },
   { value: "k3s_drain", label: "Drain node", help: "kubectl drain so pods move off the node.", category: "k3s", target: "k3s" },
@@ -46,11 +46,11 @@ export const ACTIONS: {
   { value: "k3s_shutdown_cluster", label: "Shut down whole cluster", help: "Drain and power off every node, server last.", category: "k3s", target: "k3s-host" },
   { value: "omv_shutdown", label: "Shut down OMV", help: "RPC halt, SSH fallback.", category: "omv", target: "omv" },
   { value: "omv_reboot", label: "Reboot OMV", help: "RPC reboot.", category: "omv", target: "omv" },
-  { value: "wol", label: "Wake on LAN", help: "Magic packet. HA sends both node MACs.", category: "network", target: "wol" },
+  { value: "wol", label: "Wake on LAN", help: "Magic packet to a host. Synology HA sends both node MACs from the host record.", category: "network", target: "host" },
   { value: "wait", label: "Wait a few seconds", help: "Pause before the next step.", category: "network", target: "none" },
   { value: "wait_tcp", label: "Wait until a host answers", help: "Poll DSM 5001 / Proxmox 8006 until it is up.", category: "network", target: "host" },
   { value: "ssh", label: "Run a command", help: "Uses the SSH credentials on that host.", category: "ssh", target: "host" },
-  { value: "restore_auto", label: "Start everything this outage stopped", help: "Reverses only what Blackstart stopped.", category: "restore", target: "none" },
+  { value: "restore_auto", label: "Start everything this outage stopped", help: "Reverses only what Blackstart actually stopped this outage, newest first. Does not start things that were already off.", category: "restore", target: "none" },
 ];
 
 export function actionMeta(value?: string) {
@@ -81,6 +81,6 @@ export const HOST_KIND_HELP: Record<string, string> = {
   docker:
     "Not a dedicated Docker appliance. This is how Blackstart talks to Docker: SSH into a Proxmox VM (recommended) or a TCP socket. Synology containers belong on the Synology host instead.",
   ssh: "Generic Linux box. Custom commands, or Discover to list Docker over SSH.",
-  k3s: "SSH to the k3s control plane. Discover imports nodes. Shutdown drains, then poweroffs each node (workers first).",
+  k3s: "SSH to one control-plane node (not every Pi). Discover imports the whole cluster as k3s_node targets. Cluster shutdown drains everyone, then SSH poweroff (workers first, server last). PoE hats usually boot themselves when power returns — add a MAC on a node only if you need Wake on LAN.",
   omv: "OpenMediaVault via its RPC API, with SSH fallback. Use the OMV web user. Discover also lists Docker if the SSH user can run docker.",
 };

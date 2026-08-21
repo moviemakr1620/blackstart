@@ -151,6 +151,7 @@ class EpisodeAction(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     episode_id: Mapped[int] = mapped_column(ForeignKey("episodes.id", ondelete="CASCADE"), index=True)
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    host_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     step_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     action: Mapped[str] = mapped_column(String(60))
     success: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -1,8 +1,10 @@
 import { Copy, Plus, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { ConfirmDialog } from "../confirm";
 import { useFeedback } from "../feedback";
 import { ACTIONS, actionLabel, actionMeta, CATEGORIES, categoryOf, TRIGGERS, triggerLabel } from "../labels";
+import { matchingInventory, TargetField } from "../targetPick";
 import type { Host, NotifyChannel, Policy, PolicyStep, Target, UpsSource } from "../types";
 
 function triggerSelectValue(step: PolicyStep) {
@@ -19,45 +21,6 @@ function applyTriggerType(type: string, prev: PolicyStep["trigger"]): PolicyStep
     };
   }
   return { ...prev, type, all: undefined };
-}
-
-function matchingInventory(
-  actionType: string,
-  targets: Target[],
-  hosts: Host[],
-): { kind: "none" | "notify" | "target" | "host"; targets: Target[]; hosts: Host[] } {
-  const meta = actionMeta(actionType);
-  const want = meta?.target || "none";
-  if (want === "none" || want === "notify") return { kind: want, targets: [], hosts: [] };
-  if (want === "vm") return { kind: "target", targets: targets.filter((t) => t.kind === "vm" || t.kind === "lxc"), hosts: [] };
-  if (want === "container") {
-    const syno = actionType.startsWith("synology");
-    return {
-      kind: "target",
-      targets: targets.filter(
-        (t) => t.kind === "container" && (syno ? t.host_kind === "synology" : t.host_kind !== "synology"),
-      ),
-      hosts: [],
-    };
-  }
-  if (want === "stack") return { kind: "target", targets: targets.filter((t) => t.kind === "stack"), hosts: [] };
-  if (want === "nas") return { kind: "target", targets: targets.filter((t) => t.kind === "nas" || t.host_kind === "synology"), hosts: [] };
-  if (want === "proxmox-host") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "proxmox") };
-  if (want === "host") {
-    if (actionType === "ssh") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "ssh" || h.kind === "docker") };
-    return { kind: "host", targets: [], hosts };
-  }
-  if (want === "wol") {
-    return {
-      kind: "target",
-      targets: targets.filter((t) => t.kind === "nas" || t.kind === "host" || Boolean(t.extra?.mac) || Boolean(t.extra?.mac_passive)),
-      hosts: [],
-    };
-  }
-  if (want === "k3s") return { kind: "target", targets: targets.filter((t) => t.kind === "k3s_node"), hosts: [] };
-  if (want === "k3s-host") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "k3s") };
-  if (want === "omv") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "omv") };
-  return { kind: "target", targets, hosts: [] };
 }
 
 const emptyStep = (order: number): PolicyStep => ({
@@ -84,6 +47,7 @@ export function Playbooks() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmSave, setConfirmSave] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   async function load() {
     const [p, t, h, c, u] = await Promise.all([
@@ -207,9 +171,9 @@ export function Playbooks() {
 
   async function deletePolicy() {
     if (!draft) return;
-    if (!confirm(`Delete playbook “${draft.name}”? This cannot be undone.`)) return;
     try {
       await api.del(`/api/policies/${draft.id}`);
+      setConfirmDelete(false);
       setDraft(null);
       setActiveId(null);
       await load();
@@ -284,7 +248,7 @@ export function Playbooks() {
           <button className="btn-ghost" onClick={clonePolicy} disabled={!draft || busy}>
             <Copy size={14} /> Clone
           </button>
-          <button className="btn-danger" onClick={deletePolicy} disabled={!draft || busy}>
+          <button className="btn-danger" onClick={() => setConfirmDelete(true)} disabled={!draft || busy}>
             <Trash2 size={14} /> Delete
           </button>
           <button
@@ -544,7 +508,7 @@ export function Playbooks() {
                       </select>
                       {actionHelp && <p className="text-[11px] text-slate-500">{actionHelp}</p>}
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1 md:col-span-2">
                       <label>Target</label>
                       {actionMeta(step.action.type)?.target === "none" && (
                         <div className="text-sm text-slate-500 py-2">No target needed</div>
@@ -572,57 +536,13 @@ export function Playbooks() {
                           ))}
                         </select>
                       )}
-                      {(() => {
-                        const match = matchingInventory(step.action.type || "", targets, hosts);
-                        if (match.kind === "target") {
-                          return (
-                            <select
-                              className="w-full"
-                              value={step.action.target_id ?? ""}
-                              onChange={(e) =>
-                                updateStep(idx, {
-                                  action: {
-                                    ...step.action,
-                                    target_id: e.target.value ? Number(e.target.value) : null,
-                                  },
-                                })
-                              }
-                            >
-                              <option value="">— pick a target —</option>
-                              {match.targets.map((t) => (
-                                <option key={t.id} value={t.id}>
-                                  {t.name} ({t.kind}{t.host_name ? ` · ${t.host_name}` : ""})
-                                </option>
-                              ))}
-                            </select>
-                          );
-                        }
-                        if (match.kind === "host") {
-                          return (
-                            <select
-                              className="w-full"
-                              value={step.action.host_id ?? ""}
-                              onChange={(e) =>
-                                updateStep(idx, {
-                                  action: {
-                                    ...step.action,
-                                    host_id: e.target.value ? Number(e.target.value) : null,
-                                    target_id: null,
-                                  },
-                                })
-                              }
-                            >
-                              <option value="">— pick a host —</option>
-                              {match.hosts.map((h) => (
-                                <option key={h.id} value={h.id}>
-                                  {h.name} ({h.kind})
-                                </option>
-                              ))}
-                            </select>
-                          );
-                        }
-                        return null;
-                      })()}
+                      <TargetField
+                        actionType={step.action.type || ""}
+                        action={step.action}
+                        targets={targets}
+                        hosts={hosts}
+                        onChange={(patch) => updateStep(idx, { action: { ...step.action, ...patch } })}
+                      />
                     </div>
                     <div className="space-y-1">
                       <label>Delay before this step (seconds)</label>
@@ -648,34 +568,13 @@ export function Playbooks() {
                     </div>
                   )}
                   {step.action.type === "ssh" && (
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label>Host to SSH into</label>
-                        <select
-                          className="w-full"
-                          value={step.action.host_id ?? ""}
-                          onChange={(e) =>
-                            updateStep(idx, {
-                              action: { ...step.action, host_id: e.target.value ? Number(e.target.value) : null },
-                            })
-                          }
-                        >
-                          <option value="">Use the target&apos;s host</option>
-                          {hosts.map((h) => (
-                            <option key={h.id} value={h.id}>
-                              {h.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label>Command</label>
-                        <input
-                          className="w-full"
-                          value={step.action.command || ""}
-                          onChange={(e) => updateStep(idx, { action: { ...step.action, command: e.target.value } })}
-                        />
-                      </div>
+                    <div className="space-y-1">
+                      <label>Command</label>
+                      <input
+                        className="w-full"
+                        value={step.action.command || ""}
+                        onChange={(e) => updateStep(idx, { action: { ...step.action, command: e.target.value } })}
+                      />
                     </div>
                   )}
                   {dockerish(step.action.type) && matchingInventory(step.action.type || "", targets, hosts).targets.length === 0 && (
@@ -731,12 +630,17 @@ export function Playbooks() {
                   )}
                   {step.action.type === "wol" && (
                     <div className="space-y-1">
-                      <label>MAC (optional — otherwise uses the target MAC)</label>
+                      <label>MAC override (optional)</label>
                       <input
                         className="w-full"
                         value={step.action.mac || ""}
                         onChange={(e) => updateStep(idx, { action: { ...step.action, mac: e.target.value } })}
+                        placeholder="Leave blank to use the host MAC(s)"
                       />
+                      <p className="text-[11px] text-slate-500">
+                        Blank uses the host record. Synology HA sends both node MACs. Standalone DSM sends the one MAC
+                        on that host.
+                      </p>
                     </div>
                   )}
                   {step.action.type === "wait" && (
@@ -764,7 +668,7 @@ export function Playbooks() {
                         />
                       </div>
                       <p className="text-xs text-slate-500 self-end pb-2">
-                        Uses the target host address. Typical: Synology 5001, Proxmox 8006.
+                        Uses the host address you picked. Typical: Synology 5001, Proxmox 8006.
                       </p>
                     </div>
                   )}
@@ -820,23 +724,24 @@ export function Playbooks() {
         )}
       </div>
       {confirmSave && (
-        <div className="fixed inset-0 z-40 bg-black/60 grid place-items-center p-4" onClick={() => setConfirmSave(null)}>
-          <div className="card w-full max-w-lg p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.16em] text-amber">Already assigned</div>
-              <h2 className="font-medium mt-1">This UPS already has a playbook</h2>
-            </div>
-            <p className="text-sm text-slate-300">{confirmSave}</p>
-            <div className="flex justify-end gap-2">
-              <button className="btn-ghost" onClick={() => setConfirmSave(null)} disabled={busy}>
-                Cancel
-              </button>
-              <button className="btn-warn" onClick={() => void save()} disabled={busy}>
-                Save anyway
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="This UPS already has a playbook"
+          body={confirmSave}
+          confirmLabel="Save anyway"
+          danger={false}
+          busy={busy}
+          onCancel={() => setConfirmSave(null)}
+          onConfirm={() => void save()}
+        />
+      )}
+      {confirmDelete && draft && (
+        <ConfirmDialog
+          title={`Delete playbook “${draft.name}”?`}
+          body="Steps, triggers, and the assignment to this UPS are removed. This cannot be undone."
+          busy={busy}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => void deletePolicy()}
+        />
       )}
     </div>
   );
