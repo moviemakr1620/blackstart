@@ -14,6 +14,7 @@ from app.engine.executor import (
     docker_via_ssh,
     k3s_from,
     omv_from,
+    pbs_from,
     proxmox_from,
     ssh_from,
     synology_from,
@@ -111,6 +112,9 @@ async def test_host(
         info: dict
         if row.kind == "proxmox":
             info = {"version": await proxmox_from(row).version()}
+        elif row.kind == "pbs":
+            adapter = pbs_from(row)
+            info = {"version": await adapter.version(), "node": await adapter.node_name()}
         elif row.kind == "synology":
             ping = await synology_from(row).ping()
             extra = json.loads(row.extra_json or "{}")
@@ -157,6 +161,8 @@ async def discover_host(
     try:
         if row.kind == "proxmox":
             found = await proxmox_from(row).discover()
+        elif row.kind == "pbs":
+            found = await pbs_from(row).discover()
         elif row.kind == "synology":
             found = await synology_from(row).discover()
         elif row.kind == "docker":

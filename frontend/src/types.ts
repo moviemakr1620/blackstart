@@ -43,7 +43,7 @@ export type UpsSource = {
 export type Host = {
   id: number;
   name: string;
-  kind: "proxmox" | "synology" | "docker" | "ssh" | "k3s" | "omv";
+  kind: "proxmox" | "pbs" | "synology" | "docker" | "ssh" | "k3s" | "omv";
   enabled: boolean;
   address: string;
   port: number;

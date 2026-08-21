@@ -75,7 +75,7 @@ class UpsStatus(BaseModel):
 
 class HostIn(BaseModel):
     name: str
-    kind: str = Field(pattern="^(proxmox|synology|docker|ssh|k3s|omv)$")
+    kind: str = Field(pattern="^(proxmox|pbs|synology|docker|ssh|k3s|omv)$")
     enabled: bool = True
     address: str
     port: int = 0

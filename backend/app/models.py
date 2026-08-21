@@ -63,7 +63,7 @@ class Host(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    kind: Mapped[str] = mapped_column(String(20))  # proxmox | synology | docker | ssh
+    kind: Mapped[str] = mapped_column(String(20))  # proxmox | pbs | synology | docker | ssh | k3s | omv
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     address: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer, default=0)
@@ -82,7 +82,7 @@ class Target(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     host_id: Mapped[int | None] = mapped_column(ForeignKey("hosts.id", ondelete="SET NULL"), nullable=True)
-    kind: Mapped[str] = mapped_column(String(30))  # vm | lxc | container | stack | nas | host | custom
+    kind: Mapped[str] = mapped_column(String(30))  # vm | lxc | container | stack | nas | pbs | host | custom
     name: Mapped[str] = mapped_column(String(160))
     external_id: Mapped[str] = mapped_column(String(160), default="")
     extra_json: Mapped[str] = mapped_column(Text, default="{}")

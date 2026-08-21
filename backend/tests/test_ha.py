@@ -26,3 +26,4 @@ def test_inverse_action_host_level():
     assert inverse_action("k3s_shutdown_cluster") == "k3s_restore_cluster"
     assert inverse_action("k3s_drain") == "k3s_uncordon"
     assert inverse_action("docker_stop_stack") == "docker_start_stack"
+    assert inverse_action("pbs_shutdown") == "wol"

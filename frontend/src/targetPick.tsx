@@ -28,6 +28,7 @@ export function matchingInventory(
     return { kind: "target", targets: targets.filter((t) => t.kind === "nas" || t.host_kind === "synology"), hosts: [] };
   }
   if (want === "proxmox-host") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "proxmox") };
+  if (want === "pbs-host") return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "pbs") };
   if (want === "host") {
     if (actionType === "ssh") {
       return { kind: "host", targets: [], hosts: hosts.filter((h) => h.kind === "ssh" || h.kind === "docker") };

@@ -255,7 +255,7 @@ export function Playbooks() {
             className="btn-ghost"
             onClick={async () => {
               try {
-                const kinds = new Set(["docker", "synology", "k3s", "omv", "ssh"]);
+                const kinds = new Set(["proxmox", "pbs", "docker", "synology", "k3s", "omv", "ssh"]);
                 for (const h of hosts.filter((x) => kinds.has(x.kind))) {
                   await api.post(`/api/hosts/${h.id}/discover`);
                 }

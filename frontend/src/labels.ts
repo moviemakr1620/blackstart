@@ -26,13 +26,14 @@ export const ACTIONS: {
   label: string;
   help: string;
   category: string;
-  target: "none" | "notify" | "vm" | "container" | "stack" | "nas" | "proxmox-host" | "host" | "wol" | "k3s" | "k3s-host" | "omv";
+  target: "none" | "notify" | "vm" | "container" | "stack" | "nas" | "proxmox-host" | "pbs-host" | "host" | "wol" | "k3s" | "k3s-host" | "omv";
 }[] = [
   { value: "notify", label: "Send notification", help: "Picks a channel from Settings.", category: "notify", target: "notify" },
   { value: "proxmox_shutdown", label: "ACPI shutdown", help: "Ask the guest to shut down cleanly.", category: "proxmox", target: "vm" },
   { value: "proxmox_stop", label: "Force stop", help: "Hard stop. Prefer ACPI for disks.", category: "proxmox", target: "vm" },
   { value: "proxmox_start", label: "Start", help: "Start a VM or LXC.", category: "proxmox", target: "vm" },
   { value: "proxmox_shutdown_node", label: "Shut down the node", help: "Last resort. Never the node that runs Blackstart.", category: "proxmox", target: "proxmox-host" },
+  { value: "pbs_shutdown", label: "Shut down Backup Server", help: "Halt the PBS appliance via its own API (port 8007). Inverse is Wake on LAN.", category: "proxmox", target: "pbs-host" },
   { value: "docker_stop", label: "Stop container", help: "Stop one container.", category: "docker", target: "container" },
   { value: "docker_start", label: "Start container", help: "Start one container.", category: "docker", target: "container" },
   { value: "docker_stop_stack", label: "Stop compose stack", help: "Stop a compose project.", category: "docker", target: "stack" },
@@ -75,7 +76,9 @@ export function humanize(value?: string) {
 }
 
 export const HOST_KIND_HELP: Record<string, string> = {
-  proxmox: "Talks to the Proxmox API with a token. Discover imports VMs and LXCs.",
+  proxmox:
+    "Proxmox VE (port 8006), not Backup Server. Token: Datacenter → Permissions → API Tokens, format user@pam!name plus the secret. Discover walks every node so stopped VMs and LXCs are imported too. Token needs VM.Audit (and VM.PowerMgmt to shut guests down).",
+  pbs: "Proxmox Backup Server — a different product from VE. Port 8007, header PBSAPIToken (colon between id and secret). Token: Configuration → Access Control → API Tokens. Discover imports the PBS node so you can halt it and WOL it. Put the NIC MAC on this host for restore.",
   synology:
     "Talks to DSM. For SHA, use the cluster virtual IP, tick HA, and save both node MACs so shutdown/WOL hit the pair. Container Manager on the NAS is this host — not a Docker host.",
   docker:

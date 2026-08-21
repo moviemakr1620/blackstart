@@ -10,7 +10,8 @@ from app.adapters.docker_host import DockerAdapter
 from app.adapters.k3s import K3sAdapter
 from app.adapters.notify import send_notification
 from app.adapters.omv import OmvAdapter
-from app.adapters.proxmox import ProxmoxAdapter
+from app.adapters.pbs import PbsAdapter
+from app.adapters.proxmox import ProxmoxAdapter, _node_id
 from app.adapters.ssh import SshAdapter
 from app.adapters.synology import SynologyAdapter
 from app.adapters.wol import wake_on_lan
@@ -36,10 +37,21 @@ def _extra(obj: Host | Target) -> dict[str, Any]:
 
 def proxmox_from(host: Host) -> ProxmoxAdapter:
     c = _creds(host)
-    extra = _extra(host)
     return ProxmoxAdapter(
         address=host.address,
         port=host.port or 8006,
+        token_id=c.get("token_id") or c.get("token") or "",
+        token_secret=c.get("token_secret") or c.get("secret") or "",
+        verify_tls=host.verify_tls,
+        timeout=30.0,
+    )
+
+
+def pbs_from(host: Host) -> PbsAdapter:
+    c = _creds(host)
+    return PbsAdapter(
+        address=host.address,
+        port=host.port or 8007,
         token_id=c.get("token_id") or c.get("token") or "",
         token_secret=c.get("token_secret") or c.get("secret") or "",
         verify_tls=host.verify_tls,
@@ -255,6 +267,8 @@ async def _record_k3s_cluster_restore(
 STOP_ACTIONS = {
     "proxmox_shutdown",
     "proxmox_stop",
+    "proxmox_shutdown_node",
+    "pbs_shutdown",
     "docker_stop",
     "docker_stop_stack",
     "synology_shutdown",
@@ -290,6 +304,8 @@ async def execute_action(
     if target and target.critical and protect_critical and atype in {
         "proxmox_shutdown",
         "proxmox_stop",
+        "proxmox_shutdown_node",
+        "pbs_shutdown",
         "docker_stop",
         "docker_stop_stack",
         "synology_shutdown",
@@ -428,10 +444,20 @@ async def execute_action(
     elif atype == "proxmox_shutdown_node":
         if not host:
             raise ActionError("Need a Proxmox host")
+        adapter = proxmox_from(host)
         node = action.get("node") or _extra(host).get("node")
         if not node:
-            raise ActionError("Missing Proxmox node name")
-        result = {"data": await proxmox_from(host).shutdown_node(str(node))}
+            listed = await adapter.nodes()
+            if len(listed) == 1:
+                node = _node_id(listed[0])
+        if not node:
+            raise ActionError("Missing Proxmox node name (cluster has more than one node)")
+        result = {"data": await adapter.shutdown_node(str(node))}
+    elif atype == "pbs_shutdown":
+        if not host:
+            raise ActionError("Need a Proxmox Backup Server host")
+        node = action.get("node") or _extra(host).get("node") or (target and _extra(target).get("node"))
+        result = {"data": await pbs_from(host).shutdown(str(node) if node else None)}
     elif atype in {"docker_stop", "docker_start", "docker_restart"}:
         if not host:
             raise ActionError("Docker action needs a host")
@@ -641,6 +667,7 @@ def inverse_action(action_type: str) -> str | None:
     return {
         "proxmox_shutdown": "proxmox_start",
         "proxmox_stop": "proxmox_start",
+        "pbs_shutdown": "wol",
         "docker_stop": "docker_start",
         "docker_stop_stack": "docker_start_stack",
         "synology_stop_container": "synology_start_container",

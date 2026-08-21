@@ -10,8 +10,18 @@ type PendingDelete =
   | { kind: "host"; id: number; name: string; targetCount: number }
   | { kind: "target"; id: number; name: string };
 
-const HOST_KINDS = ["proxmox", "synology", "docker", "k3s", "omv", "ssh"] as const;
-const TARGET_KINDS = ["vm", "lxc", "container", "stack", "nas", "k3s_node", "host", "custom"];
+const HOST_KINDS = ["proxmox", "pbs", "synology", "docker", "k3s", "omv", "ssh"] as const;
+const TARGET_KINDS = ["vm", "lxc", "container", "stack", "nas", "pbs", "k3s_node", "host", "custom"];
+
+const HOST_KIND_LABEL: Record<string, string> = {
+  proxmox: "proxmox (VE)",
+  pbs: "pbs (Backup Server)",
+  synology: "synology",
+  docker: "docker",
+  k3s: "k3s",
+  omv: "omv",
+  ssh: "ssh",
+};
 
 const emptyHost = {
   name: "",
@@ -116,7 +126,7 @@ export function Inventory() {
   async function saveHost() {
     setErr("");
     const creds: Record<string, string> = {};
-    if (hostForm.kind === "proxmox") {
+    if (hostForm.kind === "proxmox" || hostForm.kind === "pbs") {
       if (hostForm.token_id) creds.token_id = hostForm.token_id;
       if (hostForm.token_secret) creds.token_secret = hostForm.token_secret;
     } else {
@@ -136,6 +146,9 @@ export function Inventory() {
       extra.mac_passive = hostForm.mac_passive;
       extra.node_a = hostForm.node_a;
       extra.node_b = hostForm.node_b;
+    }
+    if (hostForm.kind === "pbs") {
+      extra.mac = hostForm.mac;
     }
     const body = {
       name: hostForm.name,
@@ -199,7 +212,7 @@ export function Inventory() {
       const res = await api.post<{ ok: boolean }>(`/api/hosts/${id}/test`);
       setMsg(res.ok ? "Connection OK." : "Test failed.");
       const host = hosts.find((h) => h.id === id);
-      if (res.ok && host && ["docker", "synology", "k3s", "omv", "ssh"].includes(host.kind)) {
+      if (res.ok && host && ["docker", "synology", "k3s", "omv", "ssh", "proxmox", "pbs"].includes(host.kind)) {
         try {
           await api.post(`/api/hosts/${id}/discover`);
           setMsg("Connection OK. Inventory refreshed from that host.");
@@ -216,8 +229,11 @@ export function Inventory() {
   async function discover(id: number) {
     setErr("");
     try {
-      await api.post(`/api/hosts/${id}/discover`);
-      setMsg("Discover complete — new targets imported.");
+      const imported = await api.post<Target[]>(`/api/hosts/${id}/discover`);
+      const vms = imported.filter((t) => t.kind === "vm").length;
+      const lxcs = imported.filter((t) => t.kind === "lxc").length;
+      const extra = vms || lxcs ? ` (${vms} VMs, ${lxcs} LXCs)` : "";
+      setMsg(`Discover complete — ${imported.length} target${imported.length === 1 ? "" : "s"} on this host${extra}.`);
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Discover failed");
@@ -360,12 +376,24 @@ export function Inventory() {
               onChange={(e) => {
                 const kind = e.target.value as Host["kind"];
                 const port =
-                  kind === "proxmox" ? 8006 : kind === "synology" ? 5001 : kind === "omv" ? 443 : kind === "docker" ? 22 : 22;
+                  kind === "proxmox"
+                    ? 8006
+                    : kind === "pbs"
+                      ? 8007
+                      : kind === "synology"
+                        ? 5001
+                        : kind === "omv"
+                          ? 443
+                          : kind === "docker"
+                            ? 22
+                            : 22;
                 setHostForm({ ...hostForm, kind, port });
               }}
             >
               {HOST_KINDS.map((k) => (
-                <option key={k}>{k}</option>
+                <option key={k} value={k}>
+                  {HOST_KIND_LABEL[k] || k}
+                </option>
               ))}
             </select>
           </div>
@@ -452,10 +480,19 @@ export function Inventory() {
             optional: put a MAC on a node target only if you actually WOL it.
           </p>
         )}
-        {hostForm.kind === "proxmox" ? (
+        {hostForm.kind === "pbs" && (
+          <div className="space-y-1 max-w-md">
+            <label>MAC (for WOL after a shutdown)</label>
+            <input className="w-full" value={hostForm.mac} onChange={(e) => setHostForm({ ...hostForm, mac: e.target.value })} />
+          </div>
+        )}
+        {(hostForm.kind === "proxmox" || hostForm.kind === "pbs") ? (
           <div className="grid md:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label>API token id (user@pam!name){editingHostId ? " — blank keeps current" : ""}</label>
+              <label>
+                API token id ({hostForm.kind === "pbs" ? "user@pbs!name or user@pam!name" : "user@pam!name"})
+                {editingHostId ? " — blank keeps current" : ""}
+              </label>
               <input className="w-full" value={hostForm.token_id} onChange={(e) => setHostForm({ ...hostForm, token_id: e.target.value })} />
             </div>
             <div className="space-y-1">
@@ -727,6 +764,7 @@ function guessStop(t: Target) {
   if (t.kind === "container" && t.host_kind === "synology") return "synology_stop_container";
   if (t.kind === "container") return "docker_stop";
   if (t.kind === "nas") return "synology_shutdown";
+  if (t.kind === "pbs") return "pbs_shutdown";
   if (t.kind === "lxc" || t.kind === "vm") return "proxmox_shutdown";
   return "notify";
 }
@@ -736,6 +774,7 @@ function guessStart(t: Target) {
   if (t.kind === "container" && t.host_kind === "synology") return "synology_start_container";
   if (t.kind === "container") return "docker_start";
   if (t.kind === "nas") return "wol";
+  if (t.kind === "pbs") return "wol";
   if (t.kind === "lxc" || t.kind === "vm") return "proxmox_start";
   return "notify";
 }
