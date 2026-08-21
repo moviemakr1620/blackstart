@@ -33,3 +33,8 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
         await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        # Existing installs: add columns create_all will not alter.
+        try:
+            await conn.exec_driver_sql("ALTER TABLE policies ADD COLUMN ups_source_id INTEGER")
+        except Exception:
+            pass

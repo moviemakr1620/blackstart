@@ -142,6 +142,7 @@ class PolicyIn(BaseModel):
     kind: str = Field(pattern="^(shed|restore)$")
     description: str = ""
     enabled: bool = True
+    ups_source_id: int | None = None
     priority: int = 100
     steps: list[PolicyStepIn] = Field(default_factory=list)
 
@@ -156,6 +157,7 @@ class PolicyOut(BaseModel):
     kind: str
     description: str
     enabled: bool
+    ups_source_id: int | None = None
     priority: int
     steps: list[PolicyStepOut] = Field(default_factory=list)
     updated_at: datetime | None = None

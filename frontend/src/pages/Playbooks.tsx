@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useFeedback } from "../feedback";
 import { ACTIONS, actionLabel, actionMeta, CATEGORIES, categoryOf, TRIGGERS, triggerLabel } from "../labels";
-import type { Host, NotifyChannel, Policy, PolicyStep, Target } from "../types";
+import type { Host, NotifyChannel, Policy, PolicyStep, Target, UpsSource } from "../types";
 
 function triggerSelectValue(step: PolicyStep) {
   if (step.trigger.all) return "online_and_battery";
@@ -77,6 +77,7 @@ export function Playbooks() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [channels, setChannels] = useState<NotifyChannel[]>([]);
+  const [upsSources, setUpsSources] = useState<UpsSource[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
   const [tab, setTab] = useState<"shed" | "restore">("shed");
@@ -84,16 +85,18 @@ export function Playbooks() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    const [p, t, h, c] = await Promise.all([
+    const [p, t, h, c, u] = await Promise.all([
       api.get<Policy[]>("/api/policies"),
       api.get<Target[]>("/api/targets"),
       api.get<Host[]>("/api/hosts"),
       api.get<NotifyChannel[]>("/api/notify-channels"),
+      api.get<UpsSource[]>("/api/ups/sources"),
     ]);
     setPolicies(p);
     setTargets(t);
     setHosts(h);
     setChannels(c);
+    setUpsSources(u);
     const first = p.find((x) => x.kind === tab) || p[0];
     if (first && (!activeId || !p.some((x) => x.id === activeId))) {
       setActiveId(first.id);
@@ -151,6 +154,7 @@ export function Playbooks() {
         kind: tab,
         description: "",
         enabled: false,
+        ups_source_id: upsSources.find((s) => s.enabled)?.id ?? upsSources[0]?.id ?? null,
         priority: 100,
         steps: [emptyStep(10)],
       });
@@ -238,10 +242,9 @@ export function Playbooks() {
           <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">What happens, and when</div>
           <h1 className="text-2xl font-semibold">Playbooks</h1>
           <p className="text-sm text-slate-500 mt-1 max-w-2xl">
-            Only one shed playbook and one restore playbook stay active. Enable the one you want; the others of that
-            type turn off. <strong className="text-slate-300">Dry run</strong> walks the steps and logs what would
-            happen. <strong className="text-slate-300">Run live</strong> actually calls Proxmox / Docker / Synology —
-            only if live actions are on in Settings.
+            Each UPS can have one active shed playbook and one active restore playbook. Pick the UPS on the playbook
+            itself. <strong className="text-slate-300">Dry run</strong> logs what would happen.{" "}
+            <strong className="text-slate-300">Run live</strong> actually calls hosts if live actions are on.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -306,7 +309,12 @@ export function Playbooks() {
                   {p.enabled ? "ACTIVE" : "off"}
                 </span>
               </div>
-              <div className="text-[11px] text-slate-500">{p.steps.length} steps</div>
+              <div className="text-[11px] text-slate-500">
+                {p.steps.length} steps
+                {p.ups_source_id
+                  ? ` · ${upsSources.find((s) => s.id === p.ups_source_id)?.name || "UPS #" + p.ups_source_id}`
+                  : ""}
+              </div>
             </button>
           ))}
           <button className="btn-ghost w-full" onClick={createPolicy}>
@@ -316,37 +324,74 @@ export function Playbooks() {
 
         {draft && (
           <section className="space-y-4">
-            <div className="card p-5 grid md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label>Name</label>
-                <input className="w-full" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+            <div className="card p-5 space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <label className="flex items-center gap-3 text-base normal-case tracking-normal text-slate-100">
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5"
+                    checked={draft.enabled}
+                    onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+                  />
+                  Active
+                </label>
+                <div className="space-y-1 min-w-[240px] flex-1">
+                  <label>This playbook applies to UPS</label>
+                  <select
+                    className="w-full text-base"
+                    value={draft.ups_source_id ?? ""}
+                    onChange={(e) => {
+                      const id = e.target.value ? Number(e.target.value) : null;
+                      const conflict = policies.find(
+                        (p) =>
+                          p.id !== draft.id &&
+                          p.kind === draft.kind &&
+                          p.enabled &&
+                          p.ups_source_id === id,
+                      );
+                      if (conflict && draft.enabled) {
+                        const ok = confirm(
+                          `UPS is already on “${conflict.name}”. Saving this as active will turn that playbook off. Continue?`,
+                        );
+                        if (!ok) return;
+                      }
+                      setDraft({ ...draft, ups_source_id: id });
+                    }}
+                  >
+                    <option value="">— pick a UPS —</option>
+                    {upsSources.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                        {s.enabled ? "" : " (disabled)"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <div className="space-y-1">
-                <label>Priority (lower runs first)</label>
-                <input
-                  className="w-full"
-                  type="number"
-                  value={draft.priority}
-                  onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })}
-                />
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label>Name</label>
+                  <input className="w-full" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                </div>
+                <div className="space-y-1">
+                  <label>Priority (lower runs first)</label>
+                  <input
+                    className="w-full"
+                    type="number"
+                    value={draft.priority}
+                    onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-1">
+                  <label>Description</label>
+                  <textarea
+                    className="w-full"
+                    rows={2}
+                    value={draft.description}
+                    onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                  />
+                </div>
               </div>
-              <div className="md:col-span-2 space-y-1">
-                <label>Description</label>
-                <textarea
-                  className="w-full"
-                  rows={2}
-                  value={draft.description}
-                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                />
-              </div>
-              <label className="flex items-center gap-2 text-sm normal-case tracking-normal text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={draft.enabled}
-                  onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
-                />
-                Active — the engine uses this playbook (turns off other {tab} playbooks)
-              </label>
             </div>
 
             <Ladder steps={draft.steps} kind={draft.kind} />

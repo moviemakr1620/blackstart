@@ -104,6 +104,7 @@ class Policy(Base):
     kind: Mapped[str] = mapped_column(String(20))  # shed | restore
     description: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    ups_source_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     priority: Mapped[int] = mapped_column(Integer, default=100)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

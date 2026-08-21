@@ -116,6 +116,7 @@ export type Policy = {
   kind: "shed" | "restore";
   description: string;
   enabled: boolean;
+  ups_source_id: number | null;
   priority: number;
   steps: PolicyStep[];
 };

@@ -76,6 +76,7 @@ def policy_out(row: Policy) -> PolicyOut:
         kind=row.kind,
         description=row.description,
         enabled=row.enabled,
+        ups_source_id=row.ups_source_id,
         priority=row.priority,
         steps=steps,
         updated_at=row.updated_at,

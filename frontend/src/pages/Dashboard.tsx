@@ -256,7 +256,7 @@ export function Dashboard() {
               </ResponsiveContainer>
             )}
           </div>
-          {view.source_kind === "simulator" || !view.source_kind ? (
+          {view.source_kind === "simulator" ? (
             <div className="mt-4 flex flex-wrap gap-2">
               <button className="btn-warn" disabled={!!busy} onClick={() => simulate("pull_plug")}>
                 Pull the plug

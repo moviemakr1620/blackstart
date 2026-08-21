@@ -296,6 +296,20 @@ async def seed_if_empty(session: AsyncSession) -> None:
             ]
         )
 
+    first_ups = (
+        await session.execute(select(UpsSource).where(UpsSource.enabled.is_(True)).order_by(UpsSource.id).limit(1))
+    ).scalar_one_or_none()
+    if first_ups is None:
+        first_ups = (await session.execute(select(UpsSource).order_by(UpsSource.id).limit(1))).scalar_one_or_none()
+    if first_ups:
+        orphans = (
+            (await session.execute(select(Policy).where(Policy.ups_source_id.is_(None))))
+            .scalars()
+            .all()
+        )
+        for pol in orphans:
+            pol.ups_source_id = first_ups.id
+
     if await session.get(Setting, "live_actions") is None:
         await put_setting(session, "live_actions", bool(settings.live_actions))
 

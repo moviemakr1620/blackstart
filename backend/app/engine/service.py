@@ -143,7 +143,7 @@ class Engine:
         snap["connected"] = True
         snap["error"] = ""
         snap["ts"] = utcnow().isoformat()
-        return snap, source
+        return snap
 
     async def tick(self, session: AsyncSession) -> int:
         settings = await get_settings_map(session)
@@ -220,8 +220,11 @@ class Engine:
             .unique()
             .all()
         )
-        # Playbooks run against the primary UPS so a second unit cannot double-shed.
-        await self._evaluate_source(session, settings, self.primary_id, primary, policies, now)
+        for src in sources:
+            snap = self.snapshots.get(src.id) or {}
+            bound = [p for p in policies if p.ups_source_id == src.id]
+            if bound:
+                await self._evaluate_source(session, settings, src.id, snap, bound, now)
         return interval
 
     async def _evaluate_source(

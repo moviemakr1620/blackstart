@@ -352,28 +352,27 @@ export function Settings() {
         <h2 className="font-medium">UPS sources</h2>
         <p className="text-sm text-slate-500">
           PeaNUT&apos;s web UI can show the EcoFlow while its <em>API</em> still requires the PeaNUT login. Save that
-          username and password here. Device name can be left blank. Enable more than one UPS if you want; playbooks
-          follow the primary. The dashboard switcher appears when two or more are on.
+          username and password here. Device name can be left blank. Enable more than one UPS if you want. Each
+          playbook picks its UPS. The dashboard switcher appears when two or more are on.
         </p>
         <div className="space-y-2">
           {sources.map((s) => (
-            <div key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-ink-900/70 px-3 py-2">
-              <div>
+            <div key={s.id} className="flex items-start gap-3 rounded-xl bg-ink-900/70 px-3 py-2">
+              <div className="min-w-0 flex-1">
                 <div className="text-sm">
                   {s.name} <span className="text-slate-500">({s.kind})</span>
                   {s.enabled && <span className="text-mint text-xs ml-2">on</span>}
-                  {settings?.primary_ups_id === s.id && <span className="text-sky text-xs ml-2">playbooks</span>}
                   {s.username && <span className="text-slate-500 text-xs ml-2">user {s.username}</span>}
                   {s.has_password && <span className="text-slate-500 text-xs ml-1">· password set</span>}
                   {!s.username && s.kind === "peanut" && (
                     <span className="text-rose text-xs ml-2">no API login</span>
                   )}
                 </div>
-                <div className="text-[11px] text-slate-500 mono">
+                <div className="text-[11px] text-slate-500 mono truncate">
                   {s.base_url || `${s.host}:${s.port}`} · {s.device_name || "(auto)"}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 shrink-0 justify-end">
                 <button className="btn-ghost" onClick={() => editSource(s)}>
                   Edit
                 </button>
@@ -383,11 +382,6 @@ export function Settings() {
                 <button className="btn-ghost" onClick={() => enableSource(s, !s.enabled)}>
                   {s.enabled ? "Disable" : "Enable"}
                 </button>
-                {s.enabled && (
-                  <button className="btn-primary" onClick={() => setPrimary(s)}>
-                    Playbooks use this
-                  </button>
-                )}
                 <button
                   className="btn-danger"
                   onClick={async () => {

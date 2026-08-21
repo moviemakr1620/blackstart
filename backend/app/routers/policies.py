@@ -53,6 +53,7 @@ async def create_policy(
         kind=body.kind,
         description=body.description,
         enabled=body.enabled,
+        ups_source_id=body.ups_source_id,
         priority=body.priority,
     )
     session.add(row)
@@ -79,7 +80,16 @@ async def create_policy(
 
 async def _exclusive_enable(session: AsyncSession, row: Policy) -> None:
     others = (
-        (await session.execute(select(Policy).where(Policy.kind == row.kind, Policy.id != row.id)))
+        (
+            await session.execute(
+                select(Policy).where(
+                    Policy.kind == row.kind,
+                    Policy.id != row.id,
+                    Policy.ups_source_id == row.ups_source_id,
+                    Policy.enabled.is_(True),
+                )
+            )
+        )
         .scalars()
         .all()
     )
@@ -99,6 +109,7 @@ async def update_policy(
     row.kind = body.kind
     row.description = body.description
     row.enabled = body.enabled
+    row.ups_source_id = body.ups_source_id
     row.priority = body.priority
     row.updated_at = utcnow()
 
@@ -152,6 +163,7 @@ async def clone_policy(
         kind=src.kind,
         description=src.description,
         enabled=False,
+        ups_source_id=src.ups_source_id,
         priority=src.priority + 1,
     )
     session.add(copy)
