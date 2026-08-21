@@ -83,6 +83,7 @@ export function Playbooks() {
   const [tab, setTab] = useState<"shed" | "restore">("shed");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmSave, setConfirmSave] = useState<string | null>(null);
 
   async function load() {
     const [p, t, h, c, u] = await Promise.all([
@@ -128,8 +129,34 @@ export function Playbooks() {
     setMsg("");
   }
 
+  function upsConflict(p: Policy): Policy | undefined {
+    if (!p.enabled || !p.ups_source_id) return undefined;
+    return policies.find(
+      (other) =>
+        other.id !== p.id &&
+        other.enabled &&
+        other.kind === p.kind &&
+        other.ups_source_id === p.ups_source_id,
+    );
+  }
+
+  function requestSave() {
+    if (!draft) return;
+    const conflict = upsConflict(draft);
+    if (conflict) {
+      const kindLabel = draft.kind === "shed" ? "load-shed" : "restore";
+      const upsName = upsSources.find((s) => s.id === draft.ups_source_id)?.name || "this UPS";
+      setConfirmSave(
+        `${upsName} already has an active ${kindLabel} playbook “${conflict.name}”. Saving this as active will turn that playbook off.`,
+      );
+      return;
+    }
+    void save();
+  }
+
   async function save() {
     if (!draft) return;
+    setConfirmSave(null);
     setBusy(true);
     setMsg("");
     try {
@@ -277,7 +304,7 @@ export function Playbooks() {
           >
             Refresh inventory
           </button>
-          <button className="btn-primary" onClick={save} disabled={!draft || busy}>
+          <button className="btn-primary" onClick={requestSave} disabled={!draft || busy}>
             Save playbook
           </button>
         </div>
@@ -342,19 +369,6 @@ export function Playbooks() {
                     value={draft.ups_source_id ?? ""}
                     onChange={(e) => {
                       const id = e.target.value ? Number(e.target.value) : null;
-                      const conflict = policies.find(
-                        (p) =>
-                          p.id !== draft.id &&
-                          p.kind === draft.kind &&
-                          p.enabled &&
-                          p.ups_source_id === id,
-                      );
-                      if (conflict && draft.enabled) {
-                        const ok = confirm(
-                          `UPS is already on “${conflict.name}”. Saving this as active will turn that playbook off. Continue?`,
-                        );
-                        if (!ok) return;
-                      }
                       setDraft({ ...draft, ups_source_id: id });
                     }}
                   >
@@ -805,6 +819,25 @@ export function Playbooks() {
           </section>
         )}
       </div>
+      {confirmSave && (
+        <div className="fixed inset-0 z-40 bg-black/60 grid place-items-center p-4" onClick={() => setConfirmSave(null)}>
+          <div className="card w-full max-w-lg p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-amber">Already assigned</div>
+              <h2 className="font-medium mt-1">This UPS already has a playbook</h2>
+            </div>
+            <p className="text-sm text-slate-300">{confirmSave}</p>
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setConfirmSave(null)} disabled={busy}>
+                Cancel
+              </button>
+              <button className="btn-warn" onClick={() => void save()} disabled={busy}>
+                Save anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
