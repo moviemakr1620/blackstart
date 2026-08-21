@@ -74,7 +74,12 @@ export function Dashboard() {
   }, [selectedId, ups.primary_id, ups.source_id]);
 
   const onBattery = Boolean(view.on_battery);
-  const mode = ups.power_mode || (onBattery ? "on_battery" : ups.status || "unknown");
+  const mode =
+    ups.power_mode && ups.power_mode !== "unknown"
+      ? ups.power_mode
+      : onBattery
+        ? "on_battery"
+        : view.status || ups.status || "unknown";
 
   async function simulate(event: string, extra: Record<string, unknown> = {}) {
     setBusy(event);

@@ -4,6 +4,7 @@ from app.engine.evaluator import ConditionState, eval_trigger, trigger_ready
 
 def test_classify_status():
     assert classify_status("OL")[0] == "online"
+    assert classify_status("ONLINE")[0] == "online"
     assert classify_status("OL CHRG") == ("charging", False, True)
     assert classify_status("OB DISCHRG")[0] == "on_battery"
     assert classify_status("OB LB")[0] == "low_battery"

@@ -250,9 +250,11 @@ class Engine:
                     self.power_mode = "on_battery"
                     await bus.publish("state.changed", {"mode": self.power_mode})
         else:
-            if prev is True and source_id == self.primary_id:
-                self.power_mode = "online"
-                await bus.publish("state.changed", {"mode": self.power_mode})
+            if source_id == self.primary_id and self.power_mode not in {"restoring", "shedding"}:
+                if prev is True or self.power_mode == "unknown":
+                    self.power_mode = "online"
+                    if prev is True:
+                        await bus.publish("state.changed", {"mode": self.power_mode})
         self._prev_ob[source_id] = on_battery
         if source_id == self.primary_id:
             self._prev_on_battery = on_battery

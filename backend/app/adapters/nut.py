@@ -152,16 +152,16 @@ def _num(value: Any) -> float | None:
 
 def classify_status(raw: str) -> tuple[str, bool, bool]:
     """Return (status, on_battery, charging) from a NUT ups.status string."""
-    tokens = set((raw or "").upper().split())
+    tokens = set((raw or "").upper().replace(",", " ").split())
     on_battery = "OB" in tokens
-    charging = "CHRG" in tokens
+    charging = "CHRG" in tokens or "CHARGING" in tokens
     if "LB" in tokens:
         status = "low_battery"
     elif on_battery:
         status = "on_battery"
-    elif "OL" in tokens and charging:
+    elif ("OL" in tokens or "ONLINE" in tokens) and charging:
         status = "charging"
-    elif "OL" in tokens:
+    elif "OL" in tokens or "ONLINE" in tokens:
         status = "online"
     elif "FSD" in tokens:
         status = "low_battery"

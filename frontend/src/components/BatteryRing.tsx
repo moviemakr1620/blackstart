@@ -50,6 +50,6 @@ export function statusLabel(status?: string, onBattery?: boolean) {
   if (onBattery && status === "low_battery") return "Low battery";
   if (onBattery) return "On battery";
   if (status === "charging") return "Online · charging";
-  if (status === "online") return "Online";
+  if (status === "online" || status === "OL" || status === "ol") return "Online";
   return status || "Unknown";
 }
