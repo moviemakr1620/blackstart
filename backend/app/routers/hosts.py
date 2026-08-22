@@ -111,7 +111,16 @@ async def test_host(
     try:
         info: dict
         if row.kind == "proxmox":
-            info = {"version": await proxmox_from(row).version()}
+            adapter = proxmox_from(row)
+            version = await adapter.version()
+            guests = await adapter.discover()
+            info = {
+                "version": version,
+                "vms": sum(1 for g in guests if g["kind"] == "vm"),
+                "lxcs": sum(1 for g in guests if g["kind"] == "lxc"),
+                "nodes": adapter.stats.get("nodes") or [],
+                "warnings": adapter.warnings,
+            }
         elif row.kind == "pbs":
             adapter = pbs_from(row)
             info = {"version": await adapter.version(), "node": await adapter.node_name()}
@@ -139,7 +148,10 @@ async def test_host(
         else:
             raise HTTPException(400, f"unknown host kind {row.kind}")
         row.last_ok_at = utcnow()
-        row.last_error = ""
+        if row.kind == "proxmox" and isinstance(info, dict) and info.get("warnings"):
+            row.last_error = " | ".join(str(w) for w in info["warnings"][:6])
+        else:
+            row.last_error = ""
         await session.commit()
         return {"ok": True, "info": info}
     except Exception as exc:  # noqa: BLE001
@@ -159,8 +171,11 @@ async def discover_host(
     if not row:
         raise HTTPException(404, "Host not found")
     try:
+        warnings = ""
         if row.kind == "proxmox":
-            found = await proxmox_from(row).discover()
+            adapter = proxmox_from(row)
+            found = await adapter.discover()
+            warnings = " | ".join(adapter.warnings[:6])
         elif row.kind == "pbs":
             found = await pbs_from(row).discover()
         elif row.kind == "synology":
@@ -180,7 +195,7 @@ async def discover_host(
         else:
             raise HTTPException(400, "Discover is not supported for this host kind")
         row.last_ok_at = utcnow()
-        row.last_error = ""
+        row.last_error = warnings
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

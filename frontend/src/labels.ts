@@ -77,7 +77,7 @@ export function humanize(value?: string) {
 
 export const HOST_KIND_HELP: Record<string, string> = {
   proxmox:
-    "Proxmox VE (port 8006), not Backup Server. Token: Datacenter → Permissions → API Tokens, format user@pam!name plus the secret. Discover walks every node so stopped VMs and LXCs are imported too. Token needs VM.Audit (and VM.PowerMgmt to shut guests down).",
+    "Proxmox VE (port 8006), not Backup Server. Token: Datacenter → Permissions → API Tokens. A root token with Privilege Separation checked has ZERO rights until you add ACL for the token itself: Permissions → Add → API Token, Path /, Role Administrator (or uncheck Privilege Separation). Test /version can succeed while Discover still misses guests.",
   pbs: "Proxmox Backup Server — a different product from VE. Port 8007, header PBSAPIToken (colon between id and secret). Token: Configuration → Access Control → API Tokens. Discover imports the PBS node so you can halt it and WOL it. Put the NIC MAC on this host for restore.",
   synology:
     "Talks to DSM. For SHA, use the cluster virtual IP, tick HA, and save both node MACs so shutdown/WOL hit the pair. Container Manager on the NAS is this host — not a Docker host.",

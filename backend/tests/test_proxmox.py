@@ -36,7 +36,7 @@ class FakePVE(ProxmoxAdapter):
     def __init__(self) -> None:
         super().__init__("127.0.0.1", token_id="u@pam!t", token_secret="s")
 
-    async def resources(self):
+    async def resources(self, typ: str | None = None):
         return [{"type": "qemu", "vmid": 100, "name": "from-cluster", "node": "pve1", "status": "running"}]
 
     async def nodes(self):
@@ -67,3 +67,43 @@ def test_discover_walks_every_node():
     assert len(guests) == 4
     ct = next(g for g in guests if g["external_id"] == "201")
     assert ct["extra"]["node"] == "pve2"
+
+
+def test_vmid_from_id_field():
+    adapter = ProxmoxAdapter("127.0.0.1", token_id="u@pam!t", token_secret="s")
+    assert adapter._vmid({"id": "lxc/203", "type": "lxc"}) == "203"
+    assert adapter._vmid({"vmid": 100}) == "100"
+
+
+class PartialPVE(ProxmoxAdapter):
+    def __init__(self) -> None:
+        super().__init__("127.0.0.1", token_id="u@pam!t", token_secret="s")
+
+    async def resources(self, typ: str | None = None):
+        return [
+            {"type": "lxc", "id": "lxc/101", "name": "ct1", "node": "pve", "status": "running"},
+            {"type": "lxc", "id": "lxc/102", "name": "ct2", "node": "pve", "status": "stopped"},
+        ]
+
+    async def nodes(self):
+        return [{"node": "pve"}]
+
+    async def _request(self, method: str, path: str, data=None, params=None):
+        if path.endswith("/pve/qemu"):
+            raise RuntimeError("PVE 403 /api2/json/nodes/pve/qemu: Permission check failed")
+        if path.endswith("/pve/lxc"):
+            return [
+                {"vmid": 101, "name": "ct1", "status": "running"},
+                {"vmid": 102, "name": "ct2", "status": "stopped"},
+                {"vmid": 103, "name": "ct3", "status": "running"},
+            ]
+        return []
+
+
+def test_discover_keeps_lxc_when_qemu_forbidden_and_parses_id():
+    adapter = PartialPVE()
+    guests = asyncio.run(adapter.discover())
+    lxcs = [g for g in guests if g["kind"] == "lxc"]
+    assert {g["external_id"] for g in lxcs} == {"101", "102", "103"}
+    assert adapter.warnings
+    assert any("qemu" in w.lower() or "403" in w for w in adapter.warnings)

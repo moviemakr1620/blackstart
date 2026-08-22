@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -46,6 +47,8 @@ class ProxmoxAdapter:
         self.token = f"PVEAPIToken={token_id}={token_secret}" if token_id and token_secret else ""
         self.verify = verify_tls
         self.timeout = timeout
+        self.warnings: list[str] = []
+        self.stats: dict[str, Any] = {}
 
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -53,23 +56,32 @@ class ProxmoxAdapter:
             headers["Authorization"] = self.token
         return headers
 
-    async def _request(self, method: str, path: str, data: dict | None = None) -> Any:
+    async def _request(self, method: str, path: str, data: dict | None = None, params: dict | None = None) -> Any:
         url = f"{self.base}{path}"
+        kwargs: dict[str, Any] = {"headers": self._headers()}
+        if data is not None:
+            kwargs["data"] = data
+        if params:
+            kwargs["params"] = params
         async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
-            resp = await client.request(method, url, headers=self._headers(), data=data)
+            resp = await client.request(method, url, **kwargs)
             if resp.status_code >= 400:
                 detail = (resp.text or "")[:400]
                 raise RuntimeError(f"PVE {resp.status_code} {path}: {detail or resp.reason_phrase}")
             if not resp.content:
                 return {}
             body = resp.json()
-            return body.get("data", body)
+            if isinstance(body, dict) and "data" in body:
+                payload = body["data"]
+                return [] if payload is None else payload
+            return body
 
     async def version(self) -> Any:
         return await self._request("GET", "/api2/json/version")
 
-    async def resources(self) -> list[dict[str, Any]]:
-        data = await self._request("GET", "/api2/json/cluster/resources")
+    async def resources(self, typ: str | None = None) -> list[dict[str, Any]]:
+        params = {"type": typ} if typ else None
+        data = await self._request("GET", "/api2/json/cluster/resources", params=params)
         return data if isinstance(data, list) else []
 
     async def nodes(self) -> list[dict[str, Any]]:
@@ -102,6 +114,17 @@ class ProxmoxAdapter:
     async def shutdown_node(self, node: str) -> Any:
         return await self._request("POST", f"/api2/json/nodes/{node}/status/shutdown")
 
+    def _vmid(self, row: dict[str, Any]) -> str:
+        v = row.get("vmid")
+        if v is None or v == "":
+            ident = str(row.get("id") or "")
+            if "/" in ident:
+                v = ident.split("/", 1)[1]
+        if v is None or v == "":
+            return ""
+        text = str(v).strip()
+        return str(int(text)) if text.isdigit() else text
+
     def _guest(
         self,
         kind: str,
@@ -111,7 +134,9 @@ class ProxmoxAdapter:
         status: Any,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        ident = str(vmid or "").strip()
+        ident = str(vmid).strip() if vmid is not None and vmid != "" else ""
+        if ident.isdigit():
+            ident = str(int(ident))
         if not ident:
             return None
         payload = {
@@ -127,12 +152,43 @@ class ProxmoxAdapter:
         }
         return payload
 
-    async def discover(self) -> list[dict[str, Any]]:
-        """Import every QEMU VM and LXC.
+    def _guest_kind(self, typ: str) -> str | None:
+        t = (typ or "").lower()
+        if t in {"lxc", "openvz", "ct"}:
+            return "lxc"
+        if t in {"qemu", "kvm", "vm"}:
+            return "vm"
+        return None
 
-        `/cluster/resources` is convenient but incomplete when the token cannot
-        see the whole cluster view. Walk each node’s qemu + lxc lists and merge.
-        """
+    def _ingest_resource(self, res: dict[str, Any], take) -> None:
+        typ = str(res.get("type") or "")
+        kind = self._guest_kind(typ)
+        if kind is None:
+            ident = str(res.get("id") or "")
+            if ident.startswith("qemu/"):
+                kind = "vm"
+            elif ident.startswith("lxc/") or ident.startswith("openvz/"):
+                kind = "lxc"
+            else:
+                return
+        take(
+            self._guest(
+                kind,
+                self._vmid(res),
+                res.get("name"),
+                res.get("node") or _node_id(res),
+                res.get("status"),
+                {
+                    "maxmem": res.get("maxmem"),
+                    "maxcpu": res.get("maxcpu") or res.get("cpus"),
+                    "template": res.get("template"),
+                },
+            )
+        )
+
+    async def discover(self) -> list[dict[str, Any]]:
+        """Import every QEMU VM and LXC on every node."""
+        self.warnings = []
         found: dict[tuple[str, str], dict[str, Any]] = {}
 
         def take(item: dict[str, Any] | None) -> None:
@@ -147,50 +203,50 @@ class ProxmoxAdapter:
             else:
                 found[key] = item
 
-        try:
-            for res in await self.resources():
-                typ = str(res.get("type") or "")
-                if typ not in {"qemu", "lxc", "openvz"}:
-                    continue
-                kind = "lxc" if typ in {"lxc", "openvz"} else "vm"
-                take(
-                    self._guest(
-                        kind,
-                        res.get("vmid"),
-                        res.get("name"),
-                        res.get("node"),
-                        res.get("status"),
-                        {
-                            "maxmem": res.get("maxmem"),
-                            "maxcpu": res.get("maxcpu"),
-                            "template": res.get("template"),
-                        },
-                    )
-                )
-        except Exception:
-            pass
+        node_names: list[str] = []
 
-        try:
-            nodes = await self.nodes()
-        except Exception:
-            nodes = []
+        def remember_node(name: str) -> None:
+            n = (name or "").strip()
+            if n and n not in node_names:
+                node_names.append(n)
 
-        for row in nodes:
-            node = _node_id(row)
-            if not node:
+        for typ in (None, "vm"):
+            try:
+                rows = await self.resources(typ)
+            except Exception as exc:  # noqa: BLE001
+                self.warnings.append(f"cluster/resources{f'?type={typ}' if typ else ''}: {exc}")
                 continue
+            for res in rows:
+                if str(res.get("type") or "") == "node":
+                    remember_node(_node_id(res) or str(res.get("node") or ""))
+                remember_node(str(res.get("node") or ""))
+                self._ingest_resource(res, take)
+
+        try:
+            for row in await self.nodes():
+                remember_node(_node_id(row))
+        except Exception as exc:  # noqa: BLE001
+            self.warnings.append(f"nodes: {exc}")
+
+        if not node_names:
+            self.warnings.append("No Proxmox node names found. The token may be privilege-separated with no ACL.")
+
+        for node in node_names:
+            encoded = quote(node, safe="")
             for kind, path in (("vm", "qemu"), ("lxc", "lxc")):
                 try:
-                    guests = await self._request("GET", f"/api2/json/nodes/{node}/{path}")
-                except Exception:
+                    guests = await self._request("GET", f"/api2/json/nodes/{encoded}/{path}")
+                except Exception as exc:  # noqa: BLE001
+                    self.warnings.append(f"{node}/{path}: {exc}")
                     continue
                 if not isinstance(guests, list):
+                    self.warnings.append(f"{node}/{path}: expected a list, got {type(guests).__name__}")
                     continue
                 for g in guests:
                     take(
                         self._guest(
                             kind,
-                            g.get("vmid"),
+                            self._vmid(g) or g.get("vmid"),
                             g.get("name"),
                             node,
                             g.get("status"),
@@ -202,6 +258,18 @@ class ProxmoxAdapter:
                         )
                     )
 
+        vms = sum(1 for g in found.values() if g["kind"] == "vm")
+        lxcs = sum(1 for g in found.values() if g["kind"] == "lxc")
+        if self.warnings:
+            hint = (
+                "A root API token with Privilege Separation enabled starts with zero rights. "
+                "Datacenter → Permissions → Add → User/Token = this token, Path /, Role Administrator "
+                "(or uncheck Privilege Separation on the token)."
+            )
+            if not any("Privilege" in w for w in self.warnings):
+                self.warnings.append(hint)
+
+        self.stats = {"vms": vms, "lxcs": lxcs, "nodes": node_names, "total": len(found)}
         return sorted(
             found.values(),
             key=lambda x: (x["kind"], int(x["external_id"]) if str(x["external_id"]).isdigit() else 0, x["name"]),

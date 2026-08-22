@@ -209,10 +209,24 @@ export function Inventory() {
   async function testHost(id: number) {
     setErr("");
     try {
-      const res = await api.post<{ ok: boolean }>(`/api/hosts/${id}/test`);
-      setMsg(res.ok ? "Connection OK." : "Test failed.");
+      const res = await api.post<{
+        ok: boolean;
+        info?: { vms?: number; lxcs?: number; nodes?: string[]; warnings?: string[]; version?: unknown; node?: string };
+      }>(`/api/hosts/${id}/test`);
+      const info = res.info || {};
+      if (typeof info.vms === "number" || typeof info.lxcs === "number") {
+        const warn = info.warnings?.length ? ` Warning: ${info.warnings[0]}` : "";
+        setMsg(
+          `Connection OK — PVE lists ${info.vms ?? 0} VMs and ${info.lxcs ?? 0} LXCs` +
+            (info.nodes?.length ? ` on ${info.nodes.join(", ")}` : "") +
+            "." +
+            warn,
+        );
+      } else {
+        setMsg(res.ok ? "Connection OK." : "Test failed.");
+      }
       const host = hosts.find((h) => h.id === id);
-      if (res.ok && host && ["docker", "synology", "k3s", "omv", "ssh", "proxmox", "pbs"].includes(host.kind)) {
+      if (res.ok && host && ["docker", "synology", "k3s", "omv", "ssh", "pbs"].includes(host.kind)) {
         try {
           await api.post(`/api/hosts/${id}/discover`);
           setMsg("Connection OK. Inventory refreshed from that host.");
