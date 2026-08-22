@@ -50,3 +50,17 @@ def test_health_and_login_and_playbooks():
         assert saved.status_code == 200
         assert saved.json()["timezone"] == "America/Los_Angeles"
         assert saved.json()["live_actions"] is False
+
+
+def test_clear_history():
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"username": "admin", "password": "blackstart"})
+        headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        client.post("/api/ups/simulate", headers=headers, json={"event": "pull_plug"})
+        cleared = client.delete("/api/history", headers=headers)
+        assert cleared.status_code == 200
+        body = cleared.json()
+        assert body["ok"] is True
+        assert client.get("/api/runs", headers=headers).json() == []
+        assert client.get("/api/episodes", headers=headers).json() == []
+        assert client.get("/api/events/recent", headers=headers).json() == []

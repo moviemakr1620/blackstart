@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.engine.service import engine
-from app.models import AuditLog, Episode, Run, RunEvent
+from app.models import AuditLog, Episode, EpisodeAction, Run, RunEvent
 from app.schemas import EpisodeOut, RunDetailOut, RunEventOut, RunOut
 from app.security import get_current_user
 
@@ -81,6 +82,29 @@ async def get_run(
 async def abort_run(_: str = Depends(get_current_user)) -> dict:
     engine.abort()
     return {"ok": True, "running_run_id": engine.running_run_id}
+
+
+@router.delete("/history")
+async def clear_history(
+    actor: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Wipe History: runs, step logs, and outage episodes. Keeps UPS samples and inventory."""
+    engine.abort()
+    engine.conditions.reset_episode()
+    events = (await session.execute(sql_delete(RunEvent))).rowcount or 0
+    runs = (await session.execute(sql_delete(Run))).rowcount or 0
+    actions = (await session.execute(sql_delete(EpisodeAction))).rowcount or 0
+    episodes = (await session.execute(sql_delete(Episode))).rowcount or 0
+    session.add(
+        AuditLog(
+            actor=actor,
+            action="history.clear",
+            detail=f"runs={runs} events={events} episodes={episodes} actions={actions}",
+        )
+    )
+    await session.commit()
+    return {"ok": True, "runs": runs, "events": events, "episodes": episodes, "actions": actions}
 
 
 @router.get("/episodes", response_model=list[EpisodeOut])

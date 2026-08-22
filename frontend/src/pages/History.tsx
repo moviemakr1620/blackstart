@@ -1,5 +1,7 @@
+import { Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { ConfirmDialog } from "../confirm";
 import { formatDateTime, formatTime } from "../time";
 import type { Episode, Run, RunEvent } from "../types";
 
@@ -7,6 +9,10 @@ export function History() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [detail, setDetail] = useState<(Run & { events: RunEvent[] }) | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
 
   async function load() {
     const [r, e] = await Promise.all([api.get<Run[]>("/api/runs"), api.get<Episode[]>("/api/episodes")]);
@@ -15,26 +21,55 @@ export function History() {
     if (r[0]) {
       const d = await api.get<Run & { events: RunEvent[] }>(`/api/runs/${r[0].id}`);
       setDetail(d);
+    } else {
+      setDetail(null);
     }
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load().catch((e) => setErr(e instanceof Error ? e.message : "Failed to load"));
   }, []);
 
   async function openRun(id: number) {
     setDetail(await api.get<Run & { events: RunEvent[] }>(`/api/runs/${id}`));
   }
 
+  async function clearHistory() {
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await api.del<{ runs: number; events: number; episodes: number }>("/api/history");
+      setConfirmClear(false);
+      setMsg(
+        `Cleared ${res.runs} run${res.runs === 1 ? "" : "s"}, ${res.events} log line${res.events === 1 ? "" : "s"}, ${res.episodes} episode${res.episodes === 1 ? "" : "s"}.`,
+      );
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Clear failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const openEpisode = episodes.some((e) => e.status === "open");
+  const empty = runs.length === 0 && episodes.length === 0;
+
   return (
     <div className="p-6 space-y-6">
-      <header>
-        <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Outages and executions</div>
-        <h1 className="text-2xl font-semibold">History</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Dry runs, live runs, and real outages land here. Click a run on the left to see every step.
-        </p>
+      <header className="flex flex-wrap justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Outages and executions</div>
+          <h1 className="text-2xl font-semibold">History</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Dry runs, live runs, and real outages land here. Click a run on the left to see every step.
+          </p>
+        </div>
+        <button className="btn-danger" onClick={() => setConfirmClear(true)} disabled={busy || empty}>
+          <Trash2 size={14} /> Clear history
+        </button>
       </header>
+      {msg && <div className="text-sm text-mint">{msg}</div>}
+      {err && <div className="text-sm text-rose">{err}</div>}
 
       <section className="card p-5">
         <h2 className="font-medium mb-3">Outage episodes</h2>
@@ -112,6 +147,21 @@ export function History() {
           </div>
         </section>
       </div>
+      {confirmClear && (
+        <ConfirmDialog
+          title="Clear all history?"
+          body={
+            `This deletes every run log and outage episode (${runs.length} run${runs.length === 1 ? "" : "s"}, ${episodes.length} episode${episodes.length === 1 ? "" : "s"}). The dashboard UPS chart is kept.` +
+            (openEpisode
+              ? "\n\nAn outage is still marked open. Restore will no longer remember what this outage stopped."
+              : "")
+          }
+          confirmLabel="Clear history"
+          busy={busy}
+          onCancel={() => setConfirmClear(false)}
+          onConfirm={() => void clearHistory()}
+        />
+      )}
     </div>
   );
 }
