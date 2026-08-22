@@ -23,12 +23,12 @@ def test_split_api_token_pbs_blob():
 
 
 def test_pbs_token_uses_colon():
-    adapter = PbsAdapter("10.8.2.20", token_id="root@pam!blackstart", token_secret="secret-uuid")
+    adapter = PbsAdapter("192.0.2.20", token_id="root@pam!blackstart", token_secret="secret-uuid")
     assert adapter._headers()["Authorization"] == "PBSAPIToken=root@pam!blackstart:secret-uuid"
 
 
 def test_pve_token_uses_equals():
-    adapter = ProxmoxAdapter("10.8.2.10", token_id="root@pam!blackstart", token_secret="secret-uuid")
+    adapter = ProxmoxAdapter("192.0.2.10", token_id="root@pam!blackstart", token_secret="secret-uuid")
     assert adapter._headers()["Authorization"] == "PVEAPIToken=root@pam!blackstart=secret-uuid"
 
 

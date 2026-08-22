@@ -11,8 +11,8 @@ type PendingDelete =
 const emptySrc = {
   name: "PeaNUT",
   kind: "peanut" as UpsSource["kind"],
-  base_url: "http://10.8.2.50:8080",
-  host: "10.8.2.50",
+  base_url: "http://192.168.1.50:8080",
+  host: "192.168.1.50",
   port: 3493,
   device_name: "",
   username: "",

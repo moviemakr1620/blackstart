@@ -20,7 +20,7 @@ UPS  --USB-->  NUT (upsd)  -->  PeaNUT :8080   (dashboard)
                                       +--> Proxmox VE / PBS / Synology / Docker / k3s / OMV / SSH / WOL
 ```
 
-**Live actions are off by default.** Dry-run and the built-in EcoFlow-class simulator first. MIT licensed.
+**Live actions are off by default.** Dry-run and the built-in EcoFlow-class simulator first. MIT licensed. Created with [Grok Build](https://grok.com).
 
 ---
 
@@ -235,5 +235,7 @@ npm run dev
 ## License
 
 [MIT](LICENSE). Default login is `admin` / `blackstart` — change it.
+
+Created with [Grok Build](https://grok.com).
 
 Stack: FastAPI + SQLite · React/Vite/Tailwind · PeaNUT HTTP / NUT TCP · Proxmox · DSM · Docker · k3s · SSH · WOL · Discord / ntfy / Gotify.
