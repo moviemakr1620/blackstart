@@ -58,4 +58,4 @@ pct create "$CTID" "$TEMPLATE" \
 echo
 echo "Created CT $CTID ($HOSTNAME)."
 echo "Get a shell:   pct enter $CTID"
-echo "Then follow deploy/lxc.md from the 'Inside the LXC' section."
+echo "Then follow deploy/lxc.md from 'Inside the LXC — install Blackstart'."

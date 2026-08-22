@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" role="img" aria-label="Blackstart">
+  <rect width="640" height="160" rx="28" fill="#07090d"/>
+  <rect x="24" y="24" width="112" height="112" rx="28" fill="#12221f"/>
+  <path d="M90 40 L52 90 h30 l-8 38 52-54 H96 Z" fill="#5ce1c5"/>
+  <text x="168" y="92" fill="#e8eef4" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="44" font-weight="700" letter-spacing="3">BLACKSTART</text>
+  <text x="168" y="122" fill="#7d8b9c" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" letter-spacing="5">POWER ORCHESTRATOR</text>
+</svg>

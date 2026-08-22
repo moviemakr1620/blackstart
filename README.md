@@ -1,162 +1,239 @@
-# Blackstart
+<p align="center">
+  <img src="docs/images/logo.png" alt="Blackstart" width="520">
+</p>
 
-A control-room web UI that watches your **EcoFlow Delta 3 Plus** (via the UPS USB port → NUT → PeaNUT) and **orchestrates Proxmox, Synology, Docker VMs, and compose stacks** when the grid dies — then brings them back in the order you choose once the battery recovers.
+<p align="center">
+  <strong>Bring the lab down clean. Bring it back alive.</strong><br>
+  A control-room UI that watches your UPS and orchestrates Proxmox, Synology, Docker, k3s, and more when the grid dies.
+</p>
 
-You already have PeaNUT in an LXC talking to the EcoFlow. Blackstart sits next to it. It does **not** replace PeaNUT. PeaNUT is the dashboard for the UPS; Blackstart is the playbook engine.
+<p align="center">
+  <img src="docs/images/logo-mark.png" alt="Blackstart mark" width="72">
+</p>
+
+Blackstart is the playbook engine. [PeaNUT](https://github.com/Brandawg93/PeaNUT) / [NUT](https://networkupstools.org/) is the UPS collector. They sit next to each other — Blackstart never claims the UPS USB port.
 
 ```
-EcoFlow Delta 3 Plus  --USB HID-->  NUT (upsd)  -->  PeaNUT
-                                              \-->  Blackstart  -->  Proxmox / Synology / Docker / SSH / WOL
+UPS  --USB-->  NUT (upsd)  -->  PeaNUT :8080   (dashboard)
+                           \-->  Blackstart :8088  (shed / restore)
+                                      |
+                                      +--> Proxmox VE / PBS / Synology / Docker / k3s / OMV / SSH / WOL
 ```
 
-## What you can change
+**Live actions are off by default.** Dry-run and the built-in EcoFlow-class simulator first. MIT licensed.
 
-Every playbook is a list of **when → do what** steps you edit in the UI:
+---
 
-| When | Example |
+## Screenshots
+
+### Login
+
+Default is `admin` / `blackstart`. Change it in Settings immediately.
+
+![Login](docs/images/login.png)
+
+### Dashboard
+
+Battery ring, 12-hour charge chart, armed shed/restore steps, simulator controls.
+
+![Dashboard online](docs/images/dashboard.png)
+
+Grid lost (simulator **Pull the plug**). Ring goes amber; shed ladder is armed.
+
+![Dashboard on battery](docs/images/dashboard-on-battery.png)
+
+### Playbooks
+
+One active **load-shed** playbook and one **restore** playbook per UPS. Hold seconds so a 2-second flicker does not fire a step.
+
+![Playbooks](docs/images/playbooks.png)
+
+### Inventory
+
+Hosts (the machines Blackstart logs into) and targets (VM 204, a compose stack, the NAS). Discover imports guests from Proxmox, containers from Docker, nodes from k3s.
+
+![Inventory](docs/images/inventory.png)
+
+### Settings
+
+Safety switches, Discord/ntfy/Gotify, and UPS sources. Point a **peanut** source at `http://<peanut-ip>:8080`.
+
+![Settings](docs/images/settings.png)
+
+![UPS sources](docs/images/settings-ups.png)
+
+### History
+
+Every dry run, live run, and outage episode. Clear history is behind a confirm dialog.
+
+![History](docs/images/history.png)
+
+---
+
+## Install
+
+Pick one place that **stays up during a shed** (same UPS as PeaNUT). Mark it critical. Never list it in a load-shed playbook.
+
+| Path | Guide |
 | --- | --- |
-| Grid lost (`on_battery`) | Notify, arm the shed |
-| Battery ≤ 70% for 20s | Stop the `media` compose stack |
-| Battery ≤ 45% | ACPI-shutdown a Proxmox VM |
-| Runtime ≤ 15 min | Shutdown Synology |
-| Grid back + battery ≥ 55% for 90s | WOL the NAS, then start everything Blackstart stopped |
+| **Proxmox LXC** | [deploy/lxc.md](deploy/lxc.md) — Debian 12 CT, Python only, UI already built |
+| **Docker Compose** | [deploy/docker.md](deploy/docker.md) — `docker compose up -d --build` |
+| **docker run** | [deploy/docker.md](deploy/docker.md#docker-run) |
+| **PeaNUT / NUT** | [deploy/peanut.md](deploy/peanut.md) — USB UPS, helper-script LXC, or Docker |
 
-Restore can either run **explicit start steps** or a single `restore_auto` action that reverses whatever this outage actually stopped (so a VM that was already off stays off).
+### Proxmox LXC (short)
 
-**Live actions are off by default.** Until you flip that switch in Settings, playbooks evaluate and log but never touch a host. Use **Dry run** and the built-in **EcoFlow simulator** first.
-
-## Deploy on Proxmox (LXC)
-
-Step-by-step: push this repo to GitHub (or scp a tarball), create a Debian 12 CT, run the installer.
-
-**[deploy/lxc.md](deploy/lxc.md)** — Git, Create CT, `install-lxc.sh`, systemd, first login.
-
-## Quick start (this Mac / Docker)
+On the Proxmox host: **Create CT** — Debian 12, 2 cores, 1 GB RAM, 8 GB disk, unprivileged, start at boot, **no USB**. Then inside the CT:
 
 ```bash
+apt update && apt install -y git ca-certificates
+git clone https://github.com/moviemakr1620/blackstart.git /opt/blackstart
+cd /opt/blackstart
+bash deploy/install-lxc.sh
+```
+
+Open `http://<lxc-ip>:8088`. Full walkthrough (UI create, `create-lxc.sh`, updates): **[deploy/lxc.md](deploy/lxc.md)**.
+
+### Docker Compose (short)
+
+```bash
+git clone https://github.com/moviemakr1620/blackstart.git
 cd blackstart
 cp .env.example .env          # set BLACKSTART_SECRET_KEY
 docker compose up -d --build
-# open http://YOUR-HOST:8088
-# login admin / blackstart
+# http://<host>:8088
 ```
 
-Or run the two halves locally:
+Need Wake-on-LAN from the container? Use `network_mode: host` on Linux — see [deploy/docker.md](deploy/docker.md).
+
+### docker run (short)
 
 ```bash
-# terminal 1
+git clone https://github.com/moviemakr1620/blackstart.git
+cd blackstart
+docker build -t blackstart .
+docker run -d --name blackstart --restart unless-stopped \
+  -p 8088:8088 \
+  -e BLACKSTART_SECRET_KEY="$(openssl rand -hex 32)" \
+  -v blackstart-data:/data \
+  blackstart
+```
+
+---
+
+## Connect PeaNUT
+
+1. Install PeaNUT/NUT with USB on **its** LXC or container — not on Blackstart. Guide: **[deploy/peanut.md](deploy/peanut.md)**.
+2. Blackstart → **Settings → UPS sources** → kind `peanut`, URL `http://<peanut-ip>:8080`. Add the PeaNUT login if auth is on.
+3. **Test**. Disable the simulator once the ring looks right.
+
+```
+# Proxmox host — PeaNUT helper LXC (includes a current NUT)
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct/peanut.sh)"
+```
+
+Then pass the UPS USB into **that** CT only.
+
+---
+
+## First hour in the UI
+
+1. Change the admin password.
+2. Leave **Enable live actions** off.
+3. Dashboard → **Pull the plug** on the simulator. Watch History.
+4. **Inventory → Add host** — Proxmox token (`user@pam!name`, uncheck privilege separation or ACL the **token** on `/`), Synology, Docker, k3s, PBS (`pbs`, port 8007), OMV, SSH.
+5. **Discover**. Mark PeaNUT, Blackstart, DNS, and the firewall **critical**.
+6. Edit the seed playbooks (shed + restore). Dry run.
+7. Point the playbook at your real UPS. Enable live actions only when you are ready.
+
+A typical shed ladder:
+
+1. Grid lost → notify  
+2. ≤ 70% → stop a compose stack  
+3. ≤ 45% → ACPI-shutdown media VMs  
+4. ≤ 25% → shut down the NAS  
+5. ≤ 15% → last notify (leave Blackstart + PeaNUT up)
+
+Restore: WOL the NAS → wait until DSM `:5001` answers → `restore_auto` (starts only what this outage stopped).
+
+Proxmox token notes: [deploy/proxmox-token.md](deploy/proxmox-token.md).
+
+---
+
+## Safety model
+
+- Live actions default **off**
+- Engine can be paused
+- Critical targets cannot be stopped
+- Thresholds must **hold** for N seconds
+- Each step fires **once per outage episode**
+- `restore_auto` reverses only what Blackstart stopped (newest first)
+- Every action is in History
+
+Do not give the Proxmox token `Sys.PowerMgmt` unless a playbook will shut the node. Do not shed the CT that runs NUT or Blackstart.
+
+---
+
+## Hosts Blackstart can drive
+
+| Kind | Port | Discover |
+| --- | --- | --- |
+| **proxmox** (VE) | 8006 | VMs + LXCs on every node |
+| **pbs** (Backup Server) | 8007 | The PBS node (halt + WOL) |
+| **synology** | 5001 | NAS + Container Manager; HA uses both MACs |
+| **docker** | 22 / 2375 | Containers + compose stacks |
+| **k3s** | 22 | All nodes from one control plane |
+| **omv** | 443 | Halt / reboot, Docker if SSH can |
+| **ssh** | 22 | Custom commands |
+
+---
+
+## Updates
+
+**LXC**
+
+```bash
+cd /opt/blackstart && git pull && systemctl restart blackstart
+```
+
+The LXC serves `backend/static/` (already built). After a source-only commit you would need `make ui`; releases that change the UI include that bundle.
+
+**Docker**
+
+```bash
+cd blackstart && git pull && docker compose up -d --build
+```
+
+---
+
+## Dev (two terminals)
+
+```bash
+# API
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 PYTHONPATH=. uvicorn app.main:app --reload --port 8088
 
-# terminal 2
+# UI
 cd frontend
 npm install
 npm run dev
 # http://127.0.0.1:5173
 ```
 
-Change the password in **Settings** immediately.
+`make test` runs the backend suite. `make ui` rebuilds the static files the LXC serves.
 
-## Wire it to the Delta 3 Plus / PeaNUT
-
-1. EcoFlow **UPS USB port** is already passed into the PeaNUT/NUT LXC. Leave that alone.
-2. In Blackstart → **Settings → UPS sources**:
-   - **PeaNUT**: `http://<peanut-lxc-ip>:8080`, device name from PeaNUT (often `ecoflow`). Add the PeaNUT username/password if you enabled auth.
-   - **or NUT direct**: host = the LXC IP, port `3493`, same device name, plus the `upsd` user if required.
-3. Click **Test**, then **Use this**. Disable the simulator once the real feed looks right.
-
-`upsd` must listen on the LAN, not just localhost. In the NUT LXC, `/etc/nut/upsd.conf` typically needs:
-
-```
-LISTEN 0.0.0.0 3493
-```
-
-and `upsd.users` needs a user Blackstart can read as.
-
-## Add hosts
-
-**Inventory → Add host**
-
-| Kind | Address | Credentials | Discover |
-| --- | --- | --- | --- |
-| **Proxmox** | `192.168.x.x` port `8006` | API token `user@pam!tokenid` + secret. Privileges: `VM.Audit`, `VM.PowerMgmt`, `Sys.Audit`. Optional `Sys.PowerMgmt` only if you will shut the node itself. | Imports QEMU + LXC |
-| **Synology** | DSM IP port `5001` | A dedicated DSM user that can shut down the NAS (and Docker if you want Container Manager control). | Imports NAS + containers |
-| **Docker** | `unix:///var/run/docker.sock` or `tcp://host:2375` | None for a local socket. Mount the socket into the Blackstart container if you use Compose. | Imports containers + compose **stacks** |
-| **SSH** | any Linux box | user/password or private key | Add custom targets + `ssh` actions |
-
-Mark **peanut** and **blackstart** (and Pi-hole / OPNsense if they live here) as **Critical**. Settings → “Never stop targets marked critical” is on by default.
-
-For Synology restore, enable **Wake on LAN** in DSM and put the NAS MAC on the target (`extra.mac`). The default restore playbook sends a magic packet before starting workloads.
-
-## Playbooks
-
-Open **Playbooks**.
-
-- **Load shed** fires while `on_battery`.
-- **Restore** fires after the grid returns.
-
-Each step:
-
-1. **When** — `on_battery`, `battery_lte`, `battery_gte`, `runtime_lte`, `on_online`, or a compound “all of…” rule. **Hold seconds** is how long the condition must stay true (anti-flap).
-2. **Do** — notify, wait, WOL, Proxmox start/shutdown/stop, Docker container or **stack**, Synology shutdown, SSH, webhook, or `restore_auto`.
-3. **Target** — pick from Inventory.
-4. Delay, timeout, continue-on-error.
-
-**Dry run** executes the playbook against the current UPS state but only logs. **Run live** actually calls the APIs — only if live actions are enabled.
-
-A sensible first ladder (the seed playbook):
-
-1. Grid lost → notify  
-2. ≤ 70% → stop media stack  
-3. ≤ 45% → shutdown media VMs  
-4. ≤ 25% → shutdown Synology  
-5. ≤ 15% → notify “critically low” (leave peanut + blackstart up)  
-6. Online + ≥ 40% → WOL Synology  
-7. Wait until DSM port 5001 answers (`wait_tcp`)  
-8. Online + ≥ 55% → `restore_auto`
-
-Edit the numbers. Your lab, your runtime.
-
-## Simulator
-
-Until PeaNUT is pointed in, the engine uses a **Delta 3 Plus–class simulator** (1024 Wh). On the dashboard:
-
-- **Pull the plug** — status becomes `OB`, charge drains with load
-- **Restore grid** — `OL CHRG`, charge climbs
-- Jump to 80 / 40 / 15% to fire the next ladder rung
-
-Use this to watch playbooks fire in **History** without touching real machines.
-
-## Safety model
-
-- Live actions default **off**
-- Engine can be **paused**
-- Critical targets cannot be stopped
-- Each threshold must hold for N seconds
-- Each step fires **once per outage episode**
-- Restore can start **only what this episode stopped**
-- Every action is written to the run log
-
-Do not give the Proxmox token more than it needs. Do not let Blackstart shut down the node that runs NUT + Blackstart unless you like walking to the rack.
-
-## Where to run it
-
-Best: a small **privileged-enough LXC or VM that stays up** — same idea as PeaNUT. It must survive the shed. Put it on the EcoFlow, mark it critical, and never add it to a shed playbook.
-
-Docker Compose on a VM also works. If you need Wake-on-LAN, `network_mode: host` (Linux) is the reliable option.
-
-SQLite lives in `/data` (Compose volume `blackstart-data`). Back that volume up.
+---
 
 ## API
 
-Authenticated with `Authorization: Bearer <jwt>` after `POST /api/auth/login`.
+`POST /api/auth/login` then `Authorization: Bearer <jwt>`. Useful routes: `/api/ups/status`, `/api/policies`, `/api/hosts/{id}/discover`, `/api/policies/{id}/run`, `/api/ws`. Schema: `/docs`.
 
-Useful endpoints: `/api/ups/status`, `/api/policies`, `/api/hosts/{id}/discover`, `/api/policies/{id}/run`, `/api/ws`. Full schema at `/docs`.
+---
 
-## Stack
+## License
 
-FastAPI + SQLAlchemy/SQLite · React/Vite/Tailwind · NUT TCP + PeaNUT HTTP · Proxmox API · DSM WebAPI · Docker Engine API · SSH · WOL · ntfy/Gotify/webhook.
+[MIT](LICENSE). Default login is `admin` / `blackstart` — change it.
 
-Default login: `admin` / `blackstart`.
+Stack: FastAPI + SQLite · React/Vite/Tailwind · PeaNUT HTTP / NUT TCP · Proxmox · DSM · Docker · k3s · SSH · WOL · Discord / ntfy / Gotify.

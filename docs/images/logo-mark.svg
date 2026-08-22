@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Blackstart">
+  <rect width="128" height="128" rx="28" fill="#07090d"/>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#12221f"/>
+  <path d="M76 22 L40 70 h28 l-8 40 48-54 H80 Z" fill="#5ce1c5"/>
+</svg>
