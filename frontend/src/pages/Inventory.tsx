@@ -1,3 +1,4 @@
+import { Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ConfirmDialog } from "../confirm";
@@ -63,6 +64,8 @@ export function Inventory() {
   const [targetForm, setTargetForm] = useState(emptyTarget);
   const [editingHostId, setEditingHostId] = useState<number | null>(null);
   const [editingTargetId, setEditingTargetId] = useState<number | null>(null);
+  const [showHostForm, setShowHostForm] = useState(false);
+  const [showTargetForm, setShowTargetForm] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [targetQuery, setTargetQuery] = useState("");
@@ -82,7 +85,20 @@ export function Inventory() {
     load().catch((e) => setErr(e instanceof Error ? e.message : "Failed to load"));
   }, []);
 
+  function closeHostForm() {
+    setShowHostForm(false);
+    setEditingHostId(null);
+    setHostForm(emptyHost);
+  }
+
+  function closeTargetForm() {
+    setShowTargetForm(false);
+    setEditingTargetId(null);
+    setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+  }
+
   function editHost(h: Host) {
+    setShowHostForm(true);
     setEditingHostId(h.id);
     setHostForm({
       name: h.name,
@@ -107,6 +123,7 @@ export function Inventory() {
 
   function editTarget(t: Target) {
     const extra = t.extra || {};
+    setShowTargetForm(true);
     setEditingTargetId(t.id);
     setTargetForm({
       name: t.name,
@@ -168,8 +185,7 @@ export function Inventory() {
         await api.post("/api/hosts", body);
         setMsg("Host saved.");
       }
-      setEditingHostId(null);
-      setHostForm(emptyHost);
+      closeHostForm();
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not save host");
@@ -198,8 +214,7 @@ export function Inventory() {
         await api.post("/api/targets", body);
         setMsg("Target saved.");
       }
-      setEditingTargetId(null);
-      setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+      closeTargetForm();
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not save target");
@@ -274,17 +289,11 @@ export function Inventory() {
     try {
       if (pendingDelete.kind === "host") {
         await api.del(`/api/hosts/${pendingDelete.id}`);
-        if (editingHostId === pendingDelete.id) {
-          setEditingHostId(null);
-          setHostForm(emptyHost);
-        }
+        if (editingHostId === pendingDelete.id) closeHostForm();
         setMsg(`Deleted host “${pendingDelete.name}”.`);
       } else {
         await api.del(`/api/targets/${pendingDelete.id}`);
-        if (editingTargetId === pendingDelete.id) {
-          setEditingTargetId(null);
-          setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
-        }
+        if (editingTargetId === pendingDelete.id) closeTargetForm();
         setMsg(`Deleted target “${pendingDelete.name}”.`);
       }
       setPendingDelete(null);
@@ -375,8 +384,41 @@ export function Inventory() {
       {msg && <div className="text-sm text-mint">{msg}</div>}
       {err && <div className="text-sm text-rose">{err}</div>}
 
+      <div className="flex flex-wrap gap-2">
+        {!showHostForm && (
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setEditingHostId(null);
+              setHostForm(emptyHost);
+              setShowHostForm(true);
+            }}
+          >
+            <Plus size={14} /> Add host
+          </button>
+        )}
+        {!showTargetForm && (
+          <button
+            className="btn-primary"
+            onClick={() => {
+              setEditingTargetId(null);
+              setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
+              setShowTargetForm(true);
+            }}
+          >
+            <Plus size={14} /> Add target
+          </button>
+        )}
+      </div>
+
+      {showHostForm && (
       <section className="card p-5 space-y-4">
-        <h2 className="font-medium">{editingHostId ? `Edit host #${editingHostId}` : "Add host"}</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-medium">{editingHostId ? `Edit host #${editingHostId}` : "Add host"}</h2>
+          <button className="btn-ghost" onClick={closeHostForm}>
+            <X size={14} /> Close
+          </button>
+        </div>
         <div className="grid md:grid-cols-4 gap-3">
           <div className="space-y-1">
             <label>Name</label>
@@ -536,19 +578,9 @@ export function Inventory() {
           <button className="btn-primary" onClick={saveHost}>
             {editingHostId ? "Save host changes" : "Save host"}
           </button>
-          {editingHostId && (
-            <button
-              className="btn-ghost"
-              onClick={() => {
-                setEditingHostId(null);
-                setHostForm(emptyHost);
-              }}
-            >
-              Cancel
-            </button>
-          )}
         </div>
       </section>
+      )}
 
       <section className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
         {hosts.map((h) => (
@@ -585,8 +617,14 @@ export function Inventory() {
         ))}
       </section>
 
+      {showTargetForm && (
       <section className="card p-5 space-y-4">
-        <h2 className="font-medium">{editingTargetId ? `Edit target #${editingTargetId}` : "Add target"}</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-medium">{editingTargetId ? `Edit target #${editingTargetId}` : "Add target"}</h2>
+          <button className="btn-ghost" onClick={closeTargetForm}>
+            <X size={14} /> Close
+          </button>
+        </div>
         <div className="grid md:grid-cols-4 gap-3">
           <div className="space-y-1">
             <label>Name</label>
@@ -635,19 +673,9 @@ export function Inventory() {
           <button className="btn-primary" onClick={saveTarget}>
             {editingTargetId ? "Save target changes" : "Save target"}
           </button>
-          {editingTargetId && (
-            <button
-              className="btn-ghost"
-              onClick={() => {
-                setEditingTargetId(null);
-                setTargetForm({ ...emptyTarget, host_id: hosts[0]?.id || 0 });
-              }}
-            >
-              Cancel
-            </button>
-          )}
         </div>
       </section>
+      )}
 
       <section className="card overflow-hidden">
         <div className="flex flex-wrap items-end gap-3 p-4 border-b border-white/5">
