@@ -7,16 +7,25 @@ RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
+ARG BLACKSTART_GIT_COMMIT=""
+ARG BLACKSTART_BUILD_DATE=""
+ARG BLACKSTART_VERSION=""
 LABEL org.opencontainers.image.source="https://github.com/moviemakr1620/blackstart" \
       org.opencontainers.image.url="https://github.com/moviemakr1620/blackstart" \
       org.opencontainers.image.title="Blackstart" \
       org.opencontainers.image.description="UPS-driven shutdown and restore controller for Proxmox, Synology, and Docker." \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision=$BLACKSTART_GIT_COMMIT \
+      org.opencontainers.image.created=$BLACKSTART_BUILD_DATE \
+      org.opencontainers.image.version=$BLACKSTART_VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     BLACKSTART_DATA_DIR=/data \
     BLACKSTART_HOST=0.0.0.0 \
-    BLACKSTART_PORT=8088
+    BLACKSTART_PORT=8088 \
+    BLACKSTART_GIT_COMMIT=$BLACKSTART_GIT_COMMIT \
+    BLACKSTART_BUILD_DATE=$BLACKSTART_BUILD_DATE \
+    BLACKSTART_VERSION=$BLACKSTART_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \
     && groupadd --system blackstart && useradd --system --gid blackstart --home-dir /data --shell /usr/sbin/nologin blackstart
 COPY backend/requirements.txt /app/requirements.txt

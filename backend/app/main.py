@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import buildinfo
 from app import __version__
 from app.config import settings as app_settings
 from app.db import SessionLocal, init_db
@@ -26,9 +27,18 @@ async def lifespan(_: FastAPI):
         await seed_if_empty(session)
     if app_settings.secret_source == "file":
         log.info("Using the secret key stored in %s", app_settings.secret_key_file)
-    log.info("Blackstart %s starting — data dir %s", __version__, app_settings.data_dir)
+    ver = buildinfo.public_info()
+    log.info(
+        "Blackstart %s starting — commit %s (%s) — data dir %s",
+        ver["version"],
+        ver["commit"] or "unknown",
+        ver["source"],
+        app_settings.data_dir,
+    )
     engine.start()
+    await buildinfo.start_update_checker()
     yield
+    await buildinfo.stop_update_checker()
     await engine.stop()
 
 
@@ -55,12 +65,27 @@ app.include_router(ws.router)
 
 @app.get("/api/health")
 async def health() -> dict:
+    info = buildinfo.public_info()
     return {
         "ok": True,
-        "version": __version__,
+        "version": info["version"],
+        "commit": info["commit"],
         "mode": engine.power_mode,
         "ups_connected": bool(engine.last_status.get("connected")),
     }
+
+
+@app.get("/api/version")
+async def version() -> dict:
+    # Kick a refresh if the cache is stale, but never wait on GitHub.
+    try:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        loop.create_task(buildinfo.maybe_fetch_latest())
+    except RuntimeError:
+        pass
+    return buildinfo.public_info()
 
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"

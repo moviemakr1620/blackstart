@@ -41,6 +41,12 @@ jobs:
             org.opencontainers.image.description=UPS-driven shutdown and restore controller for Proxmox, Synology, and Docker.
             org.opencontainers.image.licenses=MIT
 
+      - id: buildmeta
+        run: |
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=$(sed -n 's/^__version__ = \"\(.*\)\"/\1/p' backend/app/__init__.py | head -1)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -48,5 +54,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BLACKSTART_GIT_COMMIT=${{ steps.buildmeta.outputs.commit }}
+            BLACKSTART_BUILD_DATE=${{ steps.buildmeta.outputs.date }}
+            BLACKSTART_VERSION=${{ steps.buildmeta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
