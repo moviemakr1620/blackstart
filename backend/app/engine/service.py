@@ -19,6 +19,7 @@ from app.db import SessionLocal
 from app.engine.bus import bus
 from app.engine.evaluator import ConditionState, step_key, trigger_needs_outage, trigger_ready
 from app.engine.executor import ALWAYS_REAL_ACTIONS, execute_action, inverse_action, send_to_channels
+from app.engine.targets import expand_action_items, item_label
 from app.engine.simulator import Simulator
 from app.models import (
     AuditLog,
@@ -846,57 +847,94 @@ class Engine:
                 step_dry = dry_run if always_real else run.dry_run
                 step_live = True if always_real else live
 
-                target = None
-                host = None
-                target_id = action.get("target_id")
-                if target_id:
-                    target = (
-                        await session.execute(
-                            select(Target).options(selectinload(Target.host)).where(Target.id == int(target_id))
-                        )
-                    ).scalar_one_or_none()
-                    if target:
-                        host = target.host
-                host_id = action.get("host_id")
-                if host is None and host_id:
-                    host = await session.get(HostModel, int(host_id))
-
+                items = expand_action_items(action)
                 suffix = ""
                 if always_real and run.dry_run and not step_dry:
                     suffix = " (sent for real; live actions only gate machine changes)"
-                await self._log(
-                    session,
-                    run,
-                    "info",
-                    f"Step: {step.name}{suffix}",
-                    {"action": {k: v for k, v in action.items() if k not in {"url"}}, "target": target.name if target else None},
-                )
-                try:
-                    result = await asyncio.wait_for(
-                        execute_action(
-                            session,
-                            action,
-                            target=target,
-                            host=host,
-                            dry_run=step_dry,
-                            live=step_live,
-                            protect_critical=bool(settings.get("protect_critical")),
-                            episode_id=episode.id if episode else None,
-                            step_id=step.id,
-                        ),
-                        timeout=max(5, step.timeout_sec or 120),
+                many = len(items) > 1
+                if many:
+                    await self._log(
+                        session,
+                        run,
+                        "info",
+                        f"Step: {step.name} ({len(items)} targets){suffix}",
+                        {"action": {k: v for k, v in action.items() if k not in {"url"}}},
                     )
-                    result = result if isinstance(result, dict) else {}
-                    level = "warn" if result.get("errors") else "info"
-                    await self._log(session, run, level, f"OK: {step.name}", result)
-                except Exception as exc:  # noqa: BLE001
-                    msg = "timed out" if isinstance(exc, asyncio.TimeoutError) else redact(str(exc))
-                    await self._log(session, run, "error", f"FAIL: {step.name}: {msg}")
+                failed_labels: list[str] = []
+                abort_playbook = False
+                for item in items:
+                    if self._abort:
+                        break
+                    target = None
+                    host = None
+                    target_id = item.get("target_id")
+                    if target_id:
+                        target = (
+                            await session.execute(
+                                select(Target).options(selectinload(Target.host)).where(Target.id == int(target_id))
+                            )
+                        ).scalar_one_or_none()
+                        if target:
+                            host = target.host
+                    host_id = item.get("host_id")
+                    if host is None and host_id:
+                        host = await session.get(HostModel, int(host_id))
+                    label = item_label(item, target.name if target else None, host.name if host else None)
+                    step_tag = f"{step.name}: {label}" if many else step.name
+                    if not many:
+                        await self._log(
+                            session,
+                            run,
+                            "info",
+                            f"Step: {step.name}{suffix}",
+                            {
+                                "action": {k: v for k, v in item.items() if k not in {"url"}},
+                                "target": target.name if target else None,
+                            },
+                        )
+                    try:
+                        result = await asyncio.wait_for(
+                            execute_action(
+                                session,
+                                item,
+                                target=target,
+                                host=host,
+                                dry_run=step_dry,
+                                live=step_live,
+                                protect_critical=bool(settings.get("protect_critical")),
+                                episode_id=episode.id if episode else None,
+                                step_id=step.id,
+                            ),
+                            timeout=max(5, step.timeout_sec or 120),
+                        )
+                        result = result if isinstance(result, dict) else {}
+                        level = "warn" if result.get("errors") or result.get("skipped") else "info"
+                        if step_dry or result.get("dry_run"):
+                            await self._log(session, run, "info", f"Would {atype} {label} [DRY RUN]", result)
+                        else:
+                            await self._log(session, run, level, f"OK: {step_tag}", result)
+                    except Exception as exc:  # noqa: BLE001
+                        msg = "timed out" if isinstance(exc, asyncio.TimeoutError) else redact(str(exc))
+                        await self._log(session, run, "error", f"FAIL: {step_tag}: {msg}")
+                        failed_labels.append(label)
+                    await session.commit()
+                if failed_labels:
+                    if many:
+                        await self._log(
+                            session,
+                            run,
+                            "error",
+                            f"Step '{step.name}' finished with {len(failed_labels)} failure(s): {', '.join(failed_labels)}",
+                        )
                     if not step.continue_on_error:
                         run.status = "error"
+                        abort_playbook = True
                         await session.commit()
-                        break
-                await session.commit()
+                if abort_playbook or self._abort:
+                    if self._abort and run.status == "running":
+                        run.status = "aborted"
+                        await self._log(session, run, "warn", "Aborted by operator")
+                    break
             if run.status == "running":
                 run.status = "ok"
         finally:
