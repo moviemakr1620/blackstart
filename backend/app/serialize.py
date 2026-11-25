@@ -5,7 +5,7 @@ from typing import Any
 
 from app.models import Host, Policy, PolicyStep, Target, UpsSource
 from app.schemas import HostOut, PolicyOut, PolicyStepOut, TargetOut, UpsSourceOut
-from app.security import decrypt_json
+from app.security import SecretDecryptError, decrypt_json
 
 
 def _json(raw: str | None) -> dict[str, Any]:
@@ -34,7 +34,11 @@ def source_out(row: UpsSource) -> UpsSourceOut:
 
 
 def host_out(row: Host) -> HostOut:
-    creds = decrypt_json(row.credentials_enc)
+    creds_error = ""
+    try:
+        creds = decrypt_json(row.credentials_enc)
+    except SecretDecryptError as exc:
+        creds, creds_error = {}, str(exc)
     return HostOut(
         id=row.id,
         name=row.name,
@@ -47,6 +51,7 @@ def host_out(row: Host) -> HostOut:
         last_ok_at=row.last_ok_at,
         last_error=row.last_error,
         credential_keys=sorted(k for k, v in creds.items() if v),
+        credentials_error=creds_error,
     )
 
 
@@ -68,7 +73,24 @@ def target_out(row: Target) -> TargetOut:
     )
 
 
-def policy_out(row: Policy) -> PolicyOut:
+def binding_warning(row: Policy, sources: dict[int, UpsSource] | None) -> str:
+    if sources is None:
+        return ""
+    if row.ups_source_id is None:
+        return "Not linked to a UPS, so it will never run on its own. Pick a UPS for this playbook."
+    src = sources.get(row.ups_source_id)
+    if src is None:
+        return "Linked to a UPS that was deleted, so it will never run on its own. Pick a UPS."
+    if not src.enabled:
+        return f"Linked to '{src.name}', which is turned off, so it will not run."
+    if src.kind == "simulator":
+        others = [s for s in sources.values() if s.enabled and s.kind != "simulator"]
+        if others:
+            return f"Linked to the simulator, not your real UPS ('{others[0].name}'). A real outage will not run it."
+    return ""
+
+
+def policy_out(row: Policy, sources: dict[int, UpsSource] | None = None) -> PolicyOut:
     steps = [step_out(s) for s in sorted(row.steps, key=lambda x: x.order)]
     return PolicyOut(
         id=row.id,
@@ -80,6 +102,7 @@ def policy_out(row: Policy) -> PolicyOut:
         priority=row.priority,
         steps=steps,
         updated_at=row.updated_at,
+        binding_warning=binding_warning(row, sources),
     )
 
 

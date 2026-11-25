@@ -11,18 +11,21 @@ from app.models import Setting
 DEFAULTS: dict[str, Any] = {
     "live_actions": False,
     "engine_paused": False,
-    "restore_only_what_we_stopped": True,
     "sample_retention_hours": 168,
-    "notify_url": "",
-    "notify_kind": "none",
-    "ntfy_topic": "",
-    "gotify_token": "",
+    "run_retention_days": 90,
     "default_restore_hold_sec": 120,
     "default_shed_hold_sec": 15,
     "protect_critical": True,
     "primary_ups_id": None,
     "timezone": "",
+    # Alert when a UPS source has given no usable reading for this long.
+    "ups_stale_alert_sec": 60,
+    # Optional dead-man URL (Uptime Kuma push, healthchecks.io). Stored encrypted.
+    "heartbeat_url": "",
 }
+
+# Settings that existed in older releases and are migrated or dropped at startup.
+RETIRED_KEYS = ("notify_url", "notify_kind", "ntfy_topic", "gotify_token", "restore_only_what_we_stopped")
 
 
 async def get_settings_map(session: AsyncSession) -> dict[str, Any]:

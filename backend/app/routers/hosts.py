@@ -22,7 +22,8 @@ from app.engine.executor import (
 )
 from app.models import Host, Target, utcnow
 from app.schemas import HostIn, HostOut, TargetOut
-from app.security import decrypt_json, encrypt_json, get_current_user
+from app.redact import redact
+from app.security import SecretDecryptError, decrypt_json, encrypt_json, get_current_user
 from app.serialize import host_out, target_out
 
 router = APIRouter(prefix="/api/hosts", tags=["hosts"])
@@ -77,7 +78,10 @@ async def update_host(
     row.verify_tls = body.verify_tls
     row.extra_json = json.dumps(body.extra or {})
     if body.credentials:
-        existing = decrypt_json(row.credentials_enc)
+        try:
+            existing = decrypt_json(row.credentials_enc)
+        except SecretDecryptError:
+            existing = {}  # unreadable old value: replace it with what was entered
         existing.update({k: v for k, v in body.credentials.items() if v not in (None, "")})
         row.credentials_enc = encrypt_json(existing)
     await session.commit()
@@ -142,22 +146,58 @@ async def test_host(
         elif row.kind == "ssh":
             info = await ssh_from(row).ping()
         elif row.kind == "k3s":
-            info = {"nodes": await k3s_from(row).nodes()}
+            probe = await ssh_from(row).run("true")
+            info = {"nodes": await k3s_from(row).nodes(), "host_key": probe.get("host_key")}
         elif row.kind == "omv":
             info = await omv_from(row).ping()
         else:
             raise HTTPException(400, f"unknown host kind {row.kind}")
         row.last_ok_at = utcnow()
+        _pin_host_key(row, info)
         if row.kind == "proxmox" and isinstance(info, dict) and info.get("warnings"):
             row.last_error = " | ".join(str(w) for w in info["warnings"][:6])
         else:
             row.last_error = ""
         await session.commit()
         return {"ok": True, "info": info}
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
-        row.last_error = str(exc)
+        row.last_error = redact(str(exc))
         await session.commit()
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, row.last_error) from exc
+
+
+def _pin_host_key(row: Host, info: object) -> None:
+    """Trust-on-first-use: remember the SSH host key seen during Test."""
+    seen = info.get("host_key") if isinstance(info, dict) else None
+    if not seen:
+        return
+    extra = json.loads(row.extra_json or "{}")
+    if not isinstance(extra, dict):
+        extra = {}
+    if not extra.get("ssh_host_key"):
+        extra["ssh_host_key"] = seen
+        row.extra_json = json.dumps(extra)
+
+
+@router.post("/{host_id}/forget-host-key", response_model=HostOut)
+async def forget_host_key(
+    host_id: int,
+    _: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> HostOut:
+    """Clear the pinned SSH host key (after rebuilding that machine)."""
+    row = await session.get(Host, host_id)
+    if not row:
+        raise HTTPException(404, "Host not found")
+    extra = json.loads(row.extra_json or "{}")
+    if isinstance(extra, dict):
+        extra.pop("ssh_host_key", None)
+        row.extra_json = json.dumps(extra)
+    await session.commit()
+    await session.refresh(row)
+    return host_out(row)
 
 
 @router.post("/{host_id}/discover", response_model=list[TargetOut])
@@ -199,9 +239,9 @@ async def discover_host(
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        row.last_error = str(exc)
+        row.last_error = redact(str(exc))
         await session.commit()
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, row.last_error) from exc
 
     existing = (
         (await session.execute(select(Target).where(Target.host_id == host_id).options(selectinload(Target.host))))

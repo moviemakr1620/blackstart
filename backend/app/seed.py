@@ -1,14 +1,46 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import secrets
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.models import Host, NotifyChannel, Policy, PolicyStep, Setting, Target, UpsSource, User
+from app.config import KNOWN_DEFAULT_PASSWORDS, settings
+from app.models import Host, Policy, PolicyStep, Setting, Target, UpsSource, User
 from app.security import encrypt_secret, hash_password
-from app.store import get_settings_map, put_setting
+from app.migrate import migrate_existing
+from app.store import put_setting
+
+log = logging.getLogger("blackstart.seed")
+
+
+def _first_admin() -> User:
+    """Create the first admin. A missing or example password is replaced with a
+    random one written to <data_dir>/initial-admin-password.txt, and the user
+    must change it on first sign-in."""
+    password = settings.admin_password or ""
+    must_change = False
+    if not password or password in KNOWN_DEFAULT_PASSWORDS or len(password) < 8:
+        password = secrets.token_urlsafe(12)
+        must_change = True
+        path = settings.initial_password_file
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(f"username: {settings.admin_user}\npassword: {password}\n")
+        log.warning(
+            "Created admin user '%s' with a random password saved in %s. "
+            "You will be asked to change it after signing in.",
+            settings.admin_user,
+            path,
+        )
+    return User(
+        username=settings.admin_user,
+        password_hash=hash_password(password),
+        must_change_password=must_change,
+    )
 
 
 def _trigger(**kwargs) -> str:
@@ -22,12 +54,7 @@ def _action(**kwargs) -> str:
 async def seed_if_empty(session: AsyncSession) -> None:
     users = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
     if users == 0:
-        session.add(
-            User(
-                username=settings.admin_user,
-                password_hash=hash_password(settings.admin_password),
-            )
-        )
+        session.add(_first_admin())
 
     sources = (await session.execute(select(func.count()).select_from(UpsSource))).scalar() or 0
     if sources == 0:
@@ -146,6 +173,7 @@ async def seed_if_empty(session: AsyncSession) -> None:
         await session.flush()
 
     policies = (await session.execute(select(func.count()).select_from(Policy))).scalar() or 0
+    seeded_policies = policies == 0
     if policies == 0:
         targets = (await session.execute(select(Target))).scalars().all()
         by_name = {t.name: t for t in targets}
@@ -301,7 +329,10 @@ async def seed_if_empty(session: AsyncSession) -> None:
     ).scalar_one_or_none()
     if first_ups is None:
         first_ups = (await session.execute(select(UpsSource).order_by(UpsSource.id).limit(1))).scalar_one_or_none()
-    if first_ups:
+    # Only bind the playbooks this run just created. Playbooks a user left
+    # without a UPS stay unbound and the UI warns about them instead of
+    # silently attaching them to whatever source happens to be first.
+    if first_ups and seeded_policies:
         orphans = (
             (await session.execute(select(Policy).where(Policy.ups_source_id.is_(None))))
             .scalars()
@@ -313,18 +344,5 @@ async def seed_if_empty(session: AsyncSession) -> None:
     if await session.get(Setting, "live_actions") is None:
         await put_setting(session, "live_actions", bool(settings.live_actions))
 
-    channel_count = (await session.execute(select(func.count()).select_from(NotifyChannel))).scalar() or 0
-    if channel_count == 0:
-        cfg = await get_settings_map(session)
-        if cfg.get("notify_url") and cfg.get("notify_kind") not in (None, "", "none"):
-            session.add(
-                NotifyChannel(
-                    name=str(cfg.get("notify_kind") or "Discord").title(),
-                    kind=str(cfg.get("notify_kind") or "discord"),
-                    enabled=True,
-                    url=str(cfg.get("notify_url") or ""),
-                    topic=str(cfg.get("ntfy_topic") or ""),
-                    token_enc=encrypt_secret(str(cfg.get("gotify_token") or "")) if cfg.get("gotify_token") else "",
-                )
-            )
     await session.commit()
+    await migrate_existing(session)

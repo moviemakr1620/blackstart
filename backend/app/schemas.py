@@ -14,10 +14,12 @@ class LoginIn(BaseModel):
 class TokenOut(BaseModel):
     token: str
     username: str
+    must_change_password: bool = False
 
 
 class UserOut(BaseModel):
     username: str
+    must_change_password: bool = False
 
 
 class UpsSourceIn(BaseModel):
@@ -79,7 +81,7 @@ class HostIn(BaseModel):
     enabled: bool = True
     address: str
     port: int = 0
-    verify_tls: bool = False
+    verify_tls: bool = True
     credentials: dict[str, Any] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
 
@@ -96,6 +98,7 @@ class HostOut(BaseModel):
     last_ok_at: datetime | None = None
     last_error: str = ""
     credential_keys: list[str] = Field(default_factory=list)
+    credentials_error: str = ""
 
 
 class TargetIn(BaseModel):
@@ -161,6 +164,8 @@ class PolicyOut(BaseModel):
     priority: int
     steps: list[PolicyStepOut] = Field(default_factory=list)
     updated_at: datetime | None = None
+    # Plain-language reason this playbook will not run on a real outage, if any.
+    binding_warning: str = ""
 
 
 class RunOut(BaseModel):
@@ -199,33 +204,30 @@ class EpisodeOut(BaseModel):
 class AppSettingsOut(BaseModel):
     live_actions: bool
     engine_paused: bool
-    restore_only_what_we_stopped: bool
     sample_retention_hours: int
-    notify_url: str
-    notify_kind: str
-    ntfy_topic: str
-    gotify_token: str
+    run_retention_days: int
     default_restore_hold_sec: int
     default_shed_hold_sec: int
     protect_critical: bool
     primary_ups_id: int | None = None
     timezone: str = ""
+    ups_stale_alert_sec: int
+    heartbeat_url_set: bool = False
 
 
 class AppSettingsIn(BaseModel):
     live_actions: bool | None = None
     engine_paused: bool | None = None
-    restore_only_what_we_stopped: bool | None = None
-    sample_retention_hours: int | None = None
-    notify_url: str | None = None
-    notify_kind: str | None = None
-    ntfy_topic: str | None = None
-    gotify_token: str | None = None
-    default_restore_hold_sec: int | None = None
-    default_shed_hold_sec: int | None = None
+    sample_retention_hours: int | None = Field(default=None, ge=1, le=24 * 90)
+    run_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    default_restore_hold_sec: int | None = Field(default=None, ge=0, le=86400)
+    default_shed_hold_sec: int | None = Field(default=None, ge=0, le=86400)
     protect_critical: bool | None = None
     primary_ups_id: int | None = None
     timezone: str | None = None
+    ups_stale_alert_sec: int | None = Field(default=None, ge=10, le=3600)
+    # "" clears it; omit to keep the stored one.
+    heartbeat_url: str | None = None
 
 
 class SimulateIn(BaseModel):

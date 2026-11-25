@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.engine.service import engine
-from app.models import UpsSample, UpsSource
+from app.models import Policy, UpsSample, UpsSource
 from app.schemas import SimulateIn, UpsSourceIn, UpsSourceOut, UpsStatus
 from app.security import encrypt_secret, get_current_user
+from app.redact import redact
 from app.serialize import source_out
 
 router = APIRouter(prefix="/api/ups", tags=["ups"])
@@ -142,9 +143,14 @@ async def delete_source(
     row = await session.get(UpsSource, source_id)
     if not row:
         raise HTTPException(404, "UPS source not found")
+    # Unlink playbooks so they show a clear "not linked to a UPS" warning
+    # instead of pointing at a source that no longer exists.
+    bound = (await session.execute(select(Policy).where(Policy.ups_source_id == source_id))).scalars().all()
+    for pol in bound:
+        pol.ups_source_id = None
     await session.delete(row)
     await session.commit()
-    return {"ok": True}
+    return {"ok": True, "unlinked_playbooks": [p.name for p in bound]}
 
 
 @router.post("/sources/{source_id}/test")
@@ -156,24 +162,11 @@ async def test_source(
     row = await session.get(UpsSource, source_id)
     if not row:
         raise HTTPException(404, "UPS source not found")
-    prev = row.enabled
-    # Temporarily read using this source by flipping enabled in-memory for the reader
-    others = (await session.execute(select(UpsSource))).scalars().all()
-    saved = [(o.id, o.enabled) for o in others]
-    for o in others:
-        o.enabled = o.id == source_id
-    await session.flush()
     try:
-        snap, _src = await engine.read_ups(session)
+        snap = await engine.read_one(session, row)
         return {"ok": True, "snapshot": snap}
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, str(exc)) from exc
-    finally:
-        lookup = dict(saved)
-        for o in others:
-            o.enabled = lookup.get(o.id, False)
-        row.enabled = prev
-        await session.commit()
+        raise HTTPException(400, redact(str(exc))) from exc
 
 
 @router.post("/simulate")

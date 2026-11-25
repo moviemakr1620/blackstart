@@ -4,8 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -25,8 +24,8 @@ async def lifespan(_: FastAPI):
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session)
-    if app_settings.secret_key in {"change-me-in-production", "change-me-to-a-long-random-string"}:
-        log.warning("BLACKSTART_SECRET_KEY is still the default. Set a long random value in production.")
+    if app_settings.secret_source == "file":
+        log.info("Using the secret key stored in %s", app_settings.secret_key_file)
     log.info("Blackstart %s starting — data dir %s", __version__, app_settings.data_dir)
     engine.start()
     yield
@@ -40,13 +39,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: the UI is served from this same origin (and the Vite
+# dev server proxies /api), so browsers on other sites get no access.
 
 app.include_router(auth.router)
 app.include_router(ups.router)
@@ -66,11 +60,27 @@ async def health() -> dict:
         "version": __version__,
         "mode": engine.power_mode,
         "ups_connected": bool(engine.last_status.get("connected")),
-        "error": engine.last_error,
     }
 
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+
+def static_file_for(full_path: str) -> Path | None:
+    """Resolve a request path to a file inside STATIC_DIR, or None.
+
+    Paths that escape the folder (../, %2f-encoded slashes, symlinks) are refused.
+    """
+    if not full_path:
+        return None
+    root = STATIC_DIR.resolve()
+    try:
+        candidate = (root / full_path).resolve()
+    except (OSError, ValueError):
+        return None
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return None
+    return candidate
 if STATIC_DIR.exists():
     assets = STATIC_DIR / "assets"
     if assets.exists():
@@ -78,7 +88,9 @@ if STATIC_DIR.exists():
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str) -> FileResponse:
-        candidate = STATIC_DIR / full_path
-        if full_path and candidate.is_file():
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = static_file_for(full_path)
+        if candidate is not None:
             return FileResponse(candidate)
         return FileResponse(STATIC_DIR / "index.html")

@@ -26,6 +26,18 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
+# Columns added after the first release. create_all() does not alter existing
+# tables, so add them one by one; "duplicate column" errors mean already done.
+_ADDED_COLUMNS = [
+    ("policies", "ups_source_id INTEGER"),
+    ("episode_actions", "host_id INTEGER"),
+    ("users", "must_change_password BOOLEAN NOT NULL DEFAULT 0"),
+    ("users", "token_version INTEGER NOT NULL DEFAULT 0"),
+    ("notify_channels", "url_enc TEXT NOT NULL DEFAULT ''"),
+    ("episodes", "fired_json TEXT NOT NULL DEFAULT '[]'"),
+]
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
@@ -33,12 +45,12 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
         await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
-        # Existing installs: add columns create_all will not alter.
-        try:
-            await conn.exec_driver_sql("ALTER TABLE policies ADD COLUMN ups_source_id INTEGER")
-        except Exception:
-            pass
-        try:
-            await conn.exec_driver_sql("ALTER TABLE episode_actions ADD COLUMN host_id INTEGER")
-        except Exception:
-            pass
+        existing: dict[str, set[str]] = {}
+        for table, ddl in _ADDED_COLUMNS:
+            if table not in existing:
+                rows = (await conn.exec_driver_sql(f"PRAGMA table_info({table})")).fetchall()
+                existing[table] = {r[1] for r in rows}
+            column = ddl.split()[0]
+            if column not in existing[table]:
+                await conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+                existing[table].add(column)

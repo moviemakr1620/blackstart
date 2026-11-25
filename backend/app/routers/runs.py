@@ -91,7 +91,7 @@ async def clear_history(
 ) -> dict:
     """Wipe History: runs, step logs, and outage episodes. Keeps UPS samples and inventory."""
     engine.abort()
-    engine.conditions.reset_episode()
+    engine.reset_state()
     events = (await session.execute(sql_delete(RunEvent))).rowcount or 0
     runs = (await session.execute(sql_delete(Run))).rowcount or 0
     actions = (await session.execute(sql_delete(EpisodeAction))).rowcount or 0

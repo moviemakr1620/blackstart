@@ -9,12 +9,16 @@ from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.engine.service import engine
-from app.models import Policy, PolicyStep, utcnow
+from app.models import Policy, PolicyStep, UpsSource, utcnow
 from app.schemas import ManualRunIn, PolicyIn, PolicyOut
 from app.security import get_current_user
 from app.serialize import policy_out
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
+
+
+async def _sources(session: AsyncSession) -> dict[int, UpsSource]:
+    return {s.id: s for s in (await session.execute(select(UpsSource))).scalars().all()}
 
 
 async def _load(session: AsyncSession, policy_id: int) -> Policy:
@@ -39,7 +43,8 @@ async def list_policies(
         .unique()
         .all()
     )
-    return [policy_out(r) for r in rows]
+    srcs = await _sources(session)
+    return [policy_out(r, srcs) for r in rows]
 
 
 @router.post("", response_model=PolicyOut)
@@ -75,7 +80,7 @@ async def create_policy(
     if body.enabled:
         await _exclusive_enable(session, row)
     await session.commit()
-    return policy_out(await _load(session, row.id))
+    return policy_out(await _load(session, row.id), await _sources(session))
 
 
 async def _exclusive_enable(session: AsyncSession, row: Policy) -> None:
@@ -148,7 +153,7 @@ async def update_policy(
     if body.enabled:
         await _exclusive_enable(session, row)
     await session.commit()
-    return policy_out(await _load(session, policy_id))
+    return policy_out(await _load(session, policy_id), await _sources(session))
 
 
 @router.post("/{policy_id}/clone", response_model=PolicyOut)
@@ -183,7 +188,7 @@ async def clone_policy(
             )
         )
     await session.commit()
-    return policy_out(await _load(session, copy.id))
+    return policy_out(await _load(session, copy.id), await _sources(session))
 
 
 @router.delete("/{policy_id}")
@@ -225,6 +230,6 @@ async def restore_auto(
     _: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    run = await engine.run_restore_auto(session, dry_run=body.dry_run)
+    run = await engine.run_restore_manual(session, dry_run=body.dry_run)
     await session.commit()
     return {"ok": True, "run_id": run.id, "status": run.status, "dry_run": run.dry_run}

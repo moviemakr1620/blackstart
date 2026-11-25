@@ -18,6 +18,8 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -35,7 +37,8 @@ class NotifyChannel(Base):
     name: Mapped[str] = mapped_column(String(120))
     kind: Mapped[str] = mapped_column(String(20), default="discord")  # discord | ntfy | gotify | webhook
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    url: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(Text, default="")  # legacy plain text; migrated into url_enc
+    url_enc: Mapped[str] = mapped_column(Text, default="")
     topic: Mapped[str] = mapped_column(String(160), default="")
     token_enc: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -67,7 +70,7 @@ class Host(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     address: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer, default=0)
-    verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     credentials_enc: Mapped[str] = mapped_column(Text, default="")
     extra_json: Mapped[str] = mapped_column(Text, default="{}")
     last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -140,9 +143,11 @@ class Episode(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cause: Mapped[str] = mapped_column(String(80), default="on_battery")
-    status: Mapped[str] = mapped_column(String(20), default="open")  # open | closed
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open | superseded | closed
     min_charge: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Step keys that already fired this outage, so a restart does not repeat them.
+    fired_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class EpisodeAction(Base):
