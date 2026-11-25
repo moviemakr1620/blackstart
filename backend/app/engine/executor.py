@@ -6,9 +6,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.docker_host import DockerAdapter
+from app.adapters.docker_host import DockerAdapter, PartialStackError
 from app.adapters.k3s import K3sAdapter
-from app.adapters.notify import send_notification
+from app.adapters.notify import looks_like_discord, send_notification
 from app.adapters.omv import OmvAdapter
 from app.adapters.pbs import PbsAdapter
 from app.adapters.proxmox import ProxmoxAdapter, _node_id
@@ -16,7 +16,9 @@ from app.adapters.ssh import SshAdapter
 from app.adapters.synology import SynologyAdapter
 from app.adapters.wol import wake_on_lan
 from app.models import EpisodeAction, Host, Target
-from app.security import decrypt_json
+from app.netguard import check_host
+from app.redact import redact
+from app.security import SecretDecryptError, decrypt_json, decrypt_secret
 
 
 class ActionError(RuntimeError):
@@ -24,7 +26,30 @@ class ActionError(RuntimeError):
 
 
 def _creds(host: Host) -> dict[str, Any]:
-    return decrypt_json(host.credentials_enc)
+    try:
+        return decrypt_json(host.credentials_enc)
+    except SecretDecryptError as exc:
+        raise ActionError(f"Credentials for '{host.name}' can't be read: {exc}") from exc
+
+
+def tls_verify(host: Host) -> Any:
+    """False, True, or an SSL context trusting the host's own CA / self-signed cert.
+
+    Paste the PEM of a self-signed certificate (or your lab CA) into the host's
+    "ca_pem" extra field to verify it instead of turning verification off.
+    """
+    if not host.verify_tls:
+        return False
+    pem = str(_extra(host).get("ca_pem") or "").strip()
+    if pem:
+        import ssl
+
+        ctx = ssl.create_default_context(cadata=pem)
+        # Proxmox / DSM self-signed certs are often issued to a name, not the IP.
+        if _extra(host).get("ca_skip_hostname"):
+            ctx.check_hostname = False
+        return ctx
+    return True
 
 
 def _extra(obj: Host | Target) -> dict[str, Any]:
@@ -42,7 +67,7 @@ def proxmox_from(host: Host) -> ProxmoxAdapter:
         port=host.port or 8006,
         token_id=c.get("token_id") or c.get("token") or "",
         token_secret=c.get("token_secret") or c.get("secret") or "",
-        verify_tls=host.verify_tls,
+        verify_tls=tls_verify(host),
         timeout=30.0,
     )
 
@@ -54,7 +79,7 @@ def pbs_from(host: Host) -> PbsAdapter:
         port=host.port or 8007,
         token_id=c.get("token_id") or c.get("token") or "",
         token_secret=c.get("token_secret") or c.get("secret") or "",
-        verify_tls=host.verify_tls,
+        verify_tls=tls_verify(host),
     )
 
 
@@ -67,7 +92,7 @@ def synology_from(host: Host, address: str | None = None) -> SynologyAdapter:
         username=c.get("username") or "",
         password=c.get("password") or "",
         otp=c.get("otp") or "",
-        verify_tls=host.verify_tls,
+        verify_tls=tls_verify(host),
         use_https=extra.get("https", True),
     )
 
@@ -197,7 +222,7 @@ def omv_from(host: Host) -> OmvAdapter:
         port=host.port or 443,
         username=c.get("username") or "",
         password=c.get("password") or "",
-        verify_tls=host.verify_tls,
+        verify_tls=tls_verify(host),
         use_https=extra.get("https", True),
         ssh=ssh,
     )
@@ -211,6 +236,8 @@ def ssh_from(host: Host) -> SshAdapter:
         username=c.get("username") or "",
         password=c.get("password") or "",
         key_data=c.get("private_key") or c.get("key") or "",
+        key_passphrase=c.get("key_passphrase") or "",
+        host_key=str(_extra(host).get("ssh_host_key") or ""),
     )
 
 
@@ -264,6 +291,33 @@ async def _record_k3s_cluster_restore(
     )
 
 
+PROTECTED_ACTIONS = {
+    "proxmox_shutdown",
+    "proxmox_stop",
+    "proxmox_reboot",
+    "proxmox_shutdown_node",
+    "pbs_shutdown",
+    "docker_stop",
+    "docker_stop_stack",
+    "docker_restart",
+    "synology_shutdown",
+    "synology_ha_shutdown",
+    "synology_stop_container",
+    "k3s_shutdown_node",
+    "k3s_shutdown_cluster",
+    "k3s_drain",
+    "omv_shutdown",
+    "omv_reboot",
+    "ssh",
+    "shutdown",
+    "stop",
+    "host_shutdown",
+}
+
+# Actions that run for real in automatic runs even while live actions are off.
+# They only tell you things or wait; they never change a machine.
+ALWAYS_REAL_ACTIONS = {"notify", "webhook", "wait"}
+
 STOP_ACTIONS = {
     "proxmox_shutdown",
     "proxmox_stop",
@@ -301,23 +355,10 @@ async def execute_action(
     if not atype:
         raise ActionError("Action is missing a type")
 
-    if target and target.critical and protect_critical and atype in {
-        "proxmox_shutdown",
-        "proxmox_stop",
-        "proxmox_shutdown_node",
-        "pbs_shutdown",
-        "docker_stop",
-        "docker_stop_stack",
-        "synology_shutdown",
-        "synology_ha_shutdown",
-        "k3s_shutdown_node",
-        "k3s_shutdown_cluster",
-        "omv_shutdown",
-        "shutdown",
-        "stop",
-        "host_shutdown",
-    }:
+    if target and target.critical and protect_critical and atype in PROTECTED_ACTIONS:
         return {"skipped": True, "reason": f"protected critical target '{target.name}'"}
+    if host and protect_critical and atype in PROTECTED_ACTIONS and _extra(host).get("critical"):
+        return {"skipped": True, "reason": f"protected critical host '{host.name}'"}
 
     if dry_run or not live:
         return {
@@ -329,65 +370,12 @@ async def execute_action(
 
     result: dict[str, Any]
     if atype == "notify":
-        from sqlalchemy import select as sql_select
-
-        from app.models import NotifyChannel
-        from app.security import decrypt_secret
-
-        cfg = notify_cfg or {}
-        message = action.get("message") or "Blackstart event"
-        title = action.get("title") or ""
-        channels: list[dict[str, Any]] = []
-        rows = (await session.execute(sql_select(NotifyChannel).where(NotifyChannel.enabled.is_(True)))).scalars().all()
-        cid = action.get("channel_id")
-        if rows:
-            if cid in (None, "", "all"):
-                chosen = list(rows)
-            else:
-                chosen = [r for r in rows if r.id == int(cid)]
-                if not chosen:
-                    raise ActionError(f"Notification channel {cid} not found or disabled")
-            for row in chosen:
-                channels.append(
-                    {
-                        "kind": row.kind,
-                        "url": row.url,
-                        "topic": row.topic,
-                        "token": decrypt_secret(row.token_enc),
-                        "name": row.name,
-                    }
-                )
-        elif cfg.get("notify_url"):
-            channels.append(
-                {
-                    "kind": cfg.get("notify_kind") or "webhook",
-                    "url": cfg.get("notify_url") or "",
-                    "topic": cfg.get("ntfy_topic") or "",
-                    "token": cfg.get("gotify_token") or "",
-                    "name": "default",
-                }
-            )
-        if not channels:
-            raise ActionError("No notification channels configured. Add one in Settings.")
-        sent = []
-        errors = []
-        for ch in channels:
-            try:
-                sent.append(
-                    await send_notification(
-                        kind=ch["kind"],
-                        url=ch["url"],
-                        message=message,
-                        title=title,
-                        topic=ch.get("topic") or "",
-                        token=ch.get("token") or "",
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{ch.get('name')}: {exc}")
-        if errors and not sent:
-            raise ActionError("; ".join(errors))
-        result = {"sent": sent, "errors": errors}
+        result = await send_to_channels(
+            session,
+            action.get("message") or "Blackstart event",
+            title=action.get("title") or "",
+            channel_id=action.get("channel_id"),
+        )
     elif atype == "wait":
         seconds = float(action.get("seconds") or 5)
         await asyncio.sleep(min(seconds, 3600))
@@ -397,6 +385,10 @@ async def execute_action(
         port = int(action.get("port") or (host.port if host else 0) or 0)
         if not address or not port:
             raise ActionError("wait_tcp needs address and port")
+        try:
+            await asyncio.to_thread(check_host, str(address))
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
         timeout = float(action.get("timeout") or 180)
         interval = float(action.get("interval") or 3)
         deadline = asyncio.get_event_loop().time() + timeout
@@ -422,7 +414,7 @@ async def execute_action(
         macs = collect_macs(action, target, host)
         if not macs:
             raise ActionError("WOL requires a MAC address (HA clusters need both node MACs)")
-        broadcast = action.get("broadcast") or "255.255.255.255"
+        broadcast = _broadcast(action.get("broadcast"))
         notes = []
         for mac in macs:
             notes.append(await wake_on_lan(str(mac), str(broadcast)))
@@ -440,7 +432,14 @@ async def execute_action(
             "proxmox_reboot": "reboot",
         }[atype]
         adapter = proxmox_from(host)
-        result = {"data": await adapter.power(str(node), target.kind, target.external_id, verb)}
+        params: dict[str, Any] | None = None
+        if verb == "shutdown":
+            # Ask nicely, then force it off if the guest ignores ACPI.
+            params = {"timeout": int(action.get("shutdown_timeout") or 90), "forceStop": 1}
+        upid = await adapter.power(str(node), target.kind, target.external_id, verb, params=params)
+        wait_for = int(action.get("shutdown_timeout") or 90) + 30 if verb == "shutdown" else 90
+        status = await adapter.wait_task(str(node), upid, timeout=wait_for) if isinstance(upid, str) else {}
+        result = {"task": upid, "status": status}
     elif atype == "proxmox_shutdown_node":
         if not host:
             raise ActionError("Need a Proxmox host")
@@ -498,7 +497,13 @@ async def execute_action(
             )
             result = await docker_via_ssh(host, cmd)
         else:
-            names = await docker_from(host).stack_action(str(project), verb)
+            try:
+                names = await docker_from(host).stack_action(str(project), verb)
+            except PartialStackError as exc:
+                if verb == "stop" and exc.done and episode_id:
+                    # Some containers did stop: remember them so restore starts the stack.
+                    _record_stop(session, atype, target, host, episode_id, step_id, {"partial": exc.done})
+                raise ActionError(redact(str(exc))) from exc
             result = {"containers": names}
     elif atype in {"synology_shutdown", "synology_ha_shutdown"}:
         if not host:
@@ -547,35 +552,41 @@ async def execute_action(
         if not node:
             raise ActionError("Pick a k3s node")
         if atype == "k3s_drain":
-            result = await adapter.drain(str(node))
+            result = _ok_exit(await adapter.drain(str(node)), f"drain {node}")
         elif atype == "k3s_uncordon":
-            result = await adapter.uncordon(str(node))
+            result = _ok_exit(await adapter.uncordon(str(node)), f"uncordon {node}")
         else:
-            await adapter.drain(str(node))
+            _ok_exit(await adapter.drain(str(node)), f"drain {node}")
             addr = (target and _extra(target).get("address")) or action.get("address") or node
-            result = await adapter.shutdown_address(str(addr))
+            result = _ok_exit(await adapter.shutdown_address(str(addr)), f"shutdown {addr}", shutdown=True)
     elif atype == "k3s_shutdown_cluster":
         if not host:
             raise ActionError("k3s cluster shutdown needs the control-plane host")
         adapter = k3s_from(host)
         nodes = await adapter.nodes()
         notes = []
+        failures: list[str] = []
         workers = [n for n in nodes if not n.get("control_plane")]
         # Drain everyone, shut workers first, then remaining (server last).
         ordered = workers + [n for n in nodes if n not in workers]
         for n in ordered:
             try:
-                await adapter.drain(n["name"])
+                _ok_exit(await adapter.drain(n["name"]), f"drain {n['name']}")
             except Exception as exc:  # noqa: BLE001
-                notes.append({"drain": n["name"], "error": str(exc)})
+                notes.append({"drain": n["name"], "error": redact(str(exc))})
             addr = n.get("address") or n["name"]
             try:
-                notes.append({"shutdown": addr, "data": await adapter.shutdown_address(str(addr))})
+                notes.append(
+                    {"shutdown": addr, "data": _ok_exit(await adapter.shutdown_address(str(addr)), "shutdown", True)}
+                )
             except Exception as exc:  # noqa: BLE001
-                notes.append({"shutdown": addr, "error": str(exc)})
+                notes.append({"shutdown": addr, "error": redact(str(exc))})
+                failures.append(addr)
         result = {"nodes": notes}
         if episode_id:
             await _record_k3s_cluster_restore(session, host, episode_id, step_id)
+        if failures:
+            raise ActionError(f"k3s nodes did not shut down: {', '.join(failures)}")
     elif atype == "k3s_wake_node":
         if not host:
             raise ActionError("k3s wake needs the control-plane host")
@@ -587,7 +598,7 @@ async def execute_action(
         if not node:
             raise ActionError("Pick a k3s node")
         try:
-            notes.append(await k3s_from(host).uncordon(str(node)))
+            notes.append(_ok_exit(await k3s_from(host).uncordon(str(node)), f"uncordon {node}"))
         except Exception as exc:  # noqa: BLE001
             raise ActionError(
                 f"Uncordon failed ({exc}). For PoE Pis wait until the node is up, then run restore again."
@@ -639,7 +650,7 @@ async def execute_action(
         if not url:
             raise ActionError("Webhook missing url — use Settings → Notifications instead")
         result = await send_notification(
-            kind="discord" if "discord" in url else "webhook",
+            kind="discord" if looks_like_discord(str(url)) else "webhook",
             url=url,
             message=action.get("message") or "Blackstart event",
             title=action.get("title") or "",
@@ -648,19 +659,103 @@ async def execute_action(
         raise ActionError(f"Unknown action type: {atype}")
 
     if episode_id and atype in STOP_ACTIONS and atype != "k3s_shutdown_cluster" and (target or host):
-        session.add(
-            EpisodeAction(
-                episode_id=episode_id,
-                target_id=target.id if target else None,
-                host_id=(host.id if host else None) or (target.host_id if target else None),
-                step_id=step_id,
-                action=atype,
-                success=True,
-                restore_pending=True,
-                detail=json.dumps(result)[:2000],
-            )
-        )
+        _record_stop(session, atype, target, host, episode_id, step_id, result)
     return result
+
+
+def _record_stop(
+    session: AsyncSession,
+    atype: str,
+    target: Target | None,
+    host: Host | None,
+    episode_id: int,
+    step_id: int | None,
+    result: Any,
+) -> None:
+    session.add(
+        EpisodeAction(
+            episode_id=episode_id,
+            target_id=target.id if target else None,
+            host_id=(host.id if host else None) or (target.host_id if target else None),
+            step_id=step_id,
+            action=atype,
+            success=True,
+            restore_pending=True,
+            detail=json.dumps(result, default=str)[:2000],
+        )
+    )
+
+
+def _ok_exit(result: dict[str, Any], what: str, shutdown: bool = False) -> dict[str, Any]:
+    code = result.get("exit_code")
+    # A shutdown often drops the SSH session before an exit code arrives (-1).
+    if code in (0, None) or (shutdown and code == -1):
+        return result
+    raise ActionError(redact(f"{what} failed (exit {code}): {result.get('stderr') or result.get('stdout') or ''}"))
+
+
+def _broadcast(value: Any) -> str:
+    import ipaddress
+
+    text = str(value or "255.255.255.255").strip()
+    try:
+        ip = ipaddress.IPv4Address(text)
+    except ValueError as exc:
+        raise ActionError(f"Wake-on-LAN broadcast must be an IPv4 address, not '{text}'") from exc
+    if ip.is_link_local or ip.is_loopback:
+        raise ActionError(f"Wake-on-LAN broadcast {text} is not allowed")
+    return text
+
+
+async def send_to_channels(
+    session: AsyncSession,
+    message: str,
+    title: str = "",
+    channel_id: Any = None,
+) -> dict[str, Any]:
+    """Send to the chosen channel, or every enabled one. Raises if nothing got through.
+
+    Any channel that fails is reported in the result (and raised if all failed),
+    so a broken channel never looks like a successful step.
+    """
+    from sqlalchemy import select as sql_select
+
+    from app.models import NotifyChannel
+    from app.routers.notify_channels import channel_url
+
+    rows = (await session.execute(sql_select(NotifyChannel).where(NotifyChannel.enabled.is_(True)))).scalars().all()
+    if channel_id not in (None, "", "all"):
+        try:
+            wanted = int(channel_id)
+        except (TypeError, ValueError) as exc:
+            raise ActionError(f"Bad notification channel id {channel_id!r}") from exc
+        rows = [r for r in rows if r.id == wanted]
+        if not rows:
+            raise ActionError(f"Notification channel {channel_id} not found or turned off")
+    if not rows:
+        raise ActionError("No notification channels are turned on. Add one in Settings → Notifications.")
+    sent: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for row in rows:
+        try:
+            sent.append(
+                {
+                    "channel": row.name,
+                    **await send_notification(
+                        kind=row.kind,
+                        url=channel_url(row),
+                        message=message,
+                        title=title,
+                        topic=row.topic or "",
+                        token=decrypt_secret(row.token_enc),
+                    ),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{row.name}: {redact(str(exc))}")
+    if errors and not sent:
+        raise ActionError("; ".join(errors))
+    return {"sent": sent, "errors": errors}
 
 
 def inverse_action(action_type: str) -> str | None:

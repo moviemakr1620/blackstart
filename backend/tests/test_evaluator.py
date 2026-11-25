@@ -49,3 +49,28 @@ def test_hold_and_once_per_episode():
     # Drop then recover should reset hold clock, but stay fired this episode
     sample2 = {"status": "online", "on_battery": False}
     assert not trigger_ready("s1", trigger, sample2, now=31, state=state)
+
+
+def test_trigger_needs_outage():
+    from app.engine.evaluator import trigger_needs_outage
+
+    assert trigger_needs_outage({"type": "on_online"})
+    assert trigger_needs_outage({"all": [{"type": "on_online"}, {"type": "battery_gte", "value": 80}]})
+    assert trigger_needs_outage({"type": "battery_gte", "value": 80, "require_online": True})
+    assert not trigger_needs_outage({"type": "on_battery"})
+    assert not trigger_needs_outage({"type": "battery_lte", "value": 50})
+
+
+def test_fsd_counts_as_on_battery():
+    from app.adapters.nut import classify_status
+
+    assert classify_status("FSD")[1] is True
+    assert classify_status("OL FSD")[1] is False
+
+
+def test_redact():
+    from app.redact import redact
+
+    text = redact("GET https://nas:5001/webapi/auth.cgi?account=a&passwd=hunter2 failed; token=abc")
+    assert "hunter2" not in text and "abc" not in text
+    assert "XYZ" not in redact("https://discord.com/api/webhooks/1/XYZ")
