@@ -28,7 +28,7 @@ UPS  --USB-->  NUT (upsd)  -->  PeaNUT :8080   (dashboard)
 
 ### Login
 
-Default is `admin` / `blackstart`. Change it in Settings immediately.
+There is no default password. On first start Blackstart uses `BLACKSTART_ADMIN_PASSWORD` if you set a strong one, otherwise it writes a random one to `<data dir>/initial-admin-password.txt` (`/data` in Docker, `/var/lib/blackstart` on the LXC). You must pick a new password at first login; the file is deleted after that.
 
 ![Login](docs/images/login.png)
 
@@ -44,7 +44,7 @@ Grid lost (simulator **Pull the plug**). Ring goes amber; shed ladder is armed.
 
 ### Playbooks
 
-One active **load-shed** playbook and one **restore** playbook per UPS. Hold seconds so a 2-second flicker does not fire a step.
+Each playbook is linked to one UPS; you can have several shed playbooks on the same UPS (they all run). Hold seconds so a 2-second flicker does not fire a step. A playbook linked to nothing, a deleted UPS, or the simulator while a real UPS exists shows a warning.
 
 ![Playbooks](docs/images/playbooks.png)
 
@@ -143,7 +143,7 @@ Then pass the UPS USB into **that** CT only.
 
 ## First hour in the UI
 
-1. Change the admin password.
+1. Log in with the first-run password and set your own.
 2. Leave **Enable live actions** off.
 3. Dashboard → **Pull the plug** on the simulator. Watch History.
 4. **Inventory → Add host** — Proxmox token (`user@pam!name`, uncheck privilege separation or ACL the **token** on `/`), Synology, Docker, k3s, PBS (`pbs`, port 8007), OMV, SSH.
@@ -161,19 +161,40 @@ A typical shed ladder:
 
 Restore: WOL the NAS → wait until DSM `:5001` answers → `restore_auto` (starts only what this outage stopped).
 
+### Do I need a restore playbook?
+
+No. A `restore_auto` step can sit at the end of a shed playbook behind a "grid is back" (and, say, battery ≥ 80%) trigger. A separate restore playbook is only useful when bringing things back takes its own ordered steps first (WOL the NAS, wait for it, then start what depends on it).
+
+**What `restore_auto` undoes:** every time a step stops something, Blackstart records it against the current outage *for that UPS*. `restore_auto` starts everything recorded for that UPS's outage, newest first, no matter which shed playbook stopped it. Things that were already off before the outage are never recorded, so they stay off. Each item is restored once; a dry run leaves them pending.
+
+### When steps fire
+
+- "Grid lost" / battery-level steps fire **once per outage**. If the power flickers back and then fails again, they re-arm.
+- "Grid is back" steps (and everything in a restore playbook) only run while an outage is open. Starting Blackstart on a healthy grid does not fire them.
+- If Blackstart restarts mid-outage it picks up the same outage and does not repeat steps that already ran.
+- An outage is closed 12 hours after the grid returns.
+
 Proxmox token notes: [deploy/proxmox-token.md](deploy/proxmox-token.md).
 
 ---
 
 ## Safety model
 
-- Live actions default **off**
+- Live actions default **off**. With live actions off, power actions (stop/shutdown/start) are logged as dry runs, but **notify, webhook and wait steps still run for real** during an automatic outage so you are told about it. A manual **Dry run** of a playbook sends nothing.
 - Engine can be paused
 - Critical targets cannot be stopped
 - Thresholds must **hold** for N seconds
 - Each step fires **once per outage episode**
 - `restore_auto` reverses only what Blackstart stopped (newest first)
 - Every action is in History
+- If the UPS stops reporting for `ups_stale_alert_sec` (default 60 s) Blackstart notifies you once and pauses hold timers until it reports again
+- Optional heartbeat URL (Settings), pinged every minute, for a dead-man alert (Healthchecks.io, Uptime Kuma push)
+- HTTPS certificates are verified for new hosts. For a self-signed Proxmox/PBS/DSM certificate paste it (or your CA) into the host's **Trusted certificate** box instead of turning verification off
+- SSH host keys are pinned on first **Test** (trust on first use). If a host is rebuilt, press **forget** on the host card and test again
+- Stored credentials are encrypted with a key derived from the secret key; API responses never return them (notification URLs show only a hint)
+- The secret key comes from `BLACKSTART_SECRET_KEY`, or is generated once into `<data dir>/secret.key`. Placeholders such as `change-me` are refused. Back up the data dir: without the key, stored credentials cannot be read
+- Login is rate-limited; changing the password signs out every other session
+- Proxmox shutdowns send `forceStop` after the step's timeout; keep the step timeout longer than the guest needs to shut down cleanly
 
 Do not give the Proxmox token `Sys.PowerMgmt` unless a playbook will shut the node. Do not shed the CT that runs NUT or Blackstart.
 
@@ -198,10 +219,10 @@ Do not give the Proxmox token `Sys.PowerMgmt` unless a playbook will shut the no
 **LXC**
 
 ```bash
-cd /opt/blackstart && git pull && systemctl restart blackstart
+cd /opt/blackstart && git pull && bash deploy/install-lxc.sh
 ```
 
-The LXC serves `backend/static/` (already built). After a source-only commit you would need `make ui`; releases that change the UI include that bundle.
+Re-running the installer updates Python dependencies and the systemd unit, then restarts the service. The LXC serves `backend/static/`, which is committed already built, so `git pull` updates the UI too.
 
 **Docker**
 
@@ -217,7 +238,8 @@ docker compose pull && docker compose up -d
 # API
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
+export BLACKSTART_DATA_DIR=./data   # secret.key and the DB go here
 PYTHONPATH=. uvicorn app.main:app --reload --port 8088
 
 # UI
@@ -233,13 +255,13 @@ npm run dev
 
 ## API
 
-`POST /api/auth/login` then `Authorization: Bearer <jwt>`. Useful routes: `/api/ups/status`, `/api/policies`, `/api/hosts/{id}/discover`, `/api/policies/{id}/run`, `/api/ws`. Schema: `/docs`.
+`POST /api/auth/login` then `Authorization: Bearer <jwt>`. Useful routes: `/api/ups/status`, `/api/policies`, `/api/hosts/{id}/discover`, `/api/policies/{id}/run`, `/api/ws` (send `{"token": "<jwt>"}` as the first message). Schema: `/docs`. The API does not allow cross-origin browser calls.
 
 ---
 
 ## License
 
-[MIT](LICENSE). Default login is `admin` / `blackstart` — change it.
+[MIT](LICENSE).
 
 Created with [Grok Build](https://grok.com).
 

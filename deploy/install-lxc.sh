@@ -30,7 +30,7 @@ as_blackstart() {
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  python3 python3-venv python3-pip ca-certificates curl
+  python3 python3-venv python3-pip ca-certificates curl git
 
 id -u blackstart >/dev/null 2>&1 || useradd --system --home "$DATA_DIR" --shell /usr/sbin/nologin blackstart
 mkdir -p "$DATA_DIR"
@@ -53,15 +53,27 @@ if [[ ! -f "$ENV_FILE" ]]; then
   chmod 600 "$ENV_FILE"
   echo "Wrote $ENV_FILE with a new secret key. Edit PEANUT_URL before first start if you want."
 fi
+# Older installs shipped a well-known placeholder key; the app now refuses it.
+if grep -Eq '^BLACKSTART_SECRET_KEY=(change-me.*)?$' "$ENV_FILE"; then
+  echo "NOTE: $ENV_FILE has no real secret key. Blackstart will generate one in $DATA_DIR/secret.key."
+fi
 
 install -m 644 "$APP_DIR/deploy/blackstart.service" /etc/systemd/system/blackstart.service
 systemctl daemon-reload
-systemctl enable --now blackstart.service
+systemctl enable blackstart.service
+# restart (not just start) so re-running this after `git pull` picks up new code and deps
+systemctl restart blackstart.service
 
-sleep 1
+sleep 3
 systemctl --no-pager --full status blackstart.service || true
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
 echo "Blackstart should be on http://${IP:-<lxc-ip>}:8088"
-echo "Login: admin / blackstart   — change the password immediately."
+PW_FILE="$DATA_DIR/initial-admin-password.txt"
+if [[ -f "$PW_FILE" ]]; then
+  echo "First login: user 'admin', password is in $PW_FILE"
+  echo "   (show it with: cat $PW_FILE). You will be asked to pick a new one; the file is deleted after that."
+else
+  echo "Log in with your existing admin account."
+fi
 echo "Check:  systemctl status blackstart   and   curl -sS http://127.0.0.1:8088/api/health"

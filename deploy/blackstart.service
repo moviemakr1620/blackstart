@@ -17,6 +17,28 @@ Restart=always
 RestartSec=3
 TimeoutStopSec=20
 
+# Hardening: the service only needs to write its data dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/blackstart
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
 # The LXC is the brain — if this dies during an outage, nothing else comes back.
 [Install]
 WantedBy=multi-user.target

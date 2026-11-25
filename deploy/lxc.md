@@ -76,11 +76,14 @@ The installer:
 - creates a `blackstart` system user
 - installs Python deps in a venv
 - writes `/etc/blackstart.env` with a random `BLACKSTART_SECRET_KEY`
-- enables systemd so it survives reboots
+- enables a hardened systemd unit so it survives reboots (it can only write `/var/lib/blackstart`)
+- prints where the first-run password is
 
 Open **http://\<lxc-ip\>:8088**
 
-Login: `admin` / `blackstart` — change the password in Settings immediately.
+Login: user `admin`, password from `cat /var/lib/blackstart/initial-admin-password.txt` (or the `BLACKSTART_ADMIN_PASSWORD` you put in `/etc/blackstart.env`, if it was strong). You must set a new password right away; the file is deleted afterwards.
+
+Back up `/var/lib/blackstart` (database plus `secret.key` if the key was generated there). Without the secret key, saved host credentials cannot be decrypted.
 
 Useful commands:
 
@@ -88,10 +91,8 @@ Useful commands:
 systemctl status blackstart
 journalctl -u blackstart -f
 
-# after a git pull
-cd /opt/blackstart && git pull
-runuser -u blackstart -- /opt/blackstart/backend/.venv/bin/pip install -r backend/requirements.txt
-systemctl restart blackstart
+# update: pull, then re-run the installer (deps, unit file, restart)
+cd /opt/blackstart && git pull && bash deploy/install-lxc.sh
 ```
 
 Edit `/etc/blackstart.env` to set `BLACKSTART_PEANUT_URL=http://<peanut-ip>:8080`, then `systemctl restart blackstart`. You can also add the UPS in the UI.
@@ -117,6 +118,8 @@ cd /opt/blackstart && bash deploy/install-lxc.sh
 3. Leave **Enable live actions** off
 4. Dashboard → **Pull the plug** on the simulator and watch History
 5. Only then flip live actions
+
+Notify, webhook and wait steps run for real during an automatic outage even with live actions off, so you hear about the outage while testing. Power actions stay dry runs until live actions are on.
 
 PeaNUT install: [peanut.md](peanut.md). Proxmox API token: [proxmox-token.md](proxmox-token.md).
 

@@ -6,7 +6,7 @@ Wake-on-LAN from a bridge network is unreliable. Use `network_mode: host` on Lin
 
 Do **not** publish `:8088` to the internet.
 
-You must set **`BLACKSTART_SECRET_KEY`** (a long random string) and **`BLACKSTART_ADMIN_PASSWORD`**. Compose will refuse to start if they are missing. The first-run login is `BLACKSTART_ADMIN_USER` (default `admin`) and that password — change it in the UI after you sign in.
+You must set **`BLACKSTART_SECRET_KEY`** (a long random string) and **`BLACKSTART_ADMIN_PASSWORD`**. Compose will refuse to start if they are missing. The first-run login is `BLACKSTART_ADMIN_USER` (default `admin`) and that password. You must set a new password at first sign-in. If the password you set is weak or a known default, a random one is written to `/data/initial-admin-password.txt` instead (`docker compose exec blackstart cat /data/initial-admin-password.txt`).
 
 ```bash
 openssl rand -hex 32    # a good secret key
@@ -126,9 +126,11 @@ docker run -d --name blackstart --restart unless-stopped \
 | Path | What |
 | --- | --- |
 | volume `blackstart-data` → `/data` | SQLite (`blackstart.db`). Back this up. |
-| env `BLACKSTART_SECRET_KEY` | JWT signing. Changing it logs everyone out. |
+| env `BLACKSTART_SECRET_KEY` | Signs logins and encrypts saved credentials. Changing it logs everyone out and makes saved host/UPS/notification credentials unreadable (the UI flags them to re-enter). Placeholders like `change-me` are refused. |
 | env `BLACKSTART_ADMIN_PASSWORD` | Used only to create the first user if the database is empty. |
-| env `BLACKSTART_LIVE_ACTIONS` | Keep `false` until you are ready. Also a switch in Settings. |
+| env `BLACKSTART_LIVE_ACTIONS` | Keep `false` until you are ready. Also a switch in Settings. Notify/webhook/wait steps run for real in an automatic outage even when this is off. |
+
+The container starts as root only to fix `/data` ownership (volumes from older images were root-owned) and to join the group of a mounted `/var/run/docker.sock`, then drops to the unprivileged `blackstart` user. On a host where the socket is owned by `root:root` with mode 660 that is still enough. If something needs real root, set `BLACKSTART_RUN_AS_ROOT=true` (not recommended). The image has a `HEALTHCHECK` on `/api/health`.
 
 Upgrade (image pull, no rebuild):
 
