@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { KeptField } from "../components/KeptField";
 import { ConfirmDialog } from "../confirm";
 import { COMMON_TIMEZONES, browserTimezone, listTimezones, setAppTimezone } from "../time";
 import type { AppSettings, NotifyChannel, UpsSource } from "../types";
@@ -27,6 +28,9 @@ export function Settings() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
+  const [srcClear, setSrcClear] = useState<string[]>([]);
+  const [chClear, setChClear] = useState<string[]>([]);
+
   const [src, setSrc] = useState(emptySrc);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [channels, setChannels] = useState<NotifyChannel[]>([]);
@@ -83,20 +87,22 @@ export function Settings() {
       poll_interval_sec: s.poll_interval_sec || 5,
       enabled: s.enabled,
     });
-    setMsg(`Editing “${s.name}”. Leave password blank to keep the current one.`);
+    setSrcClear([]);
+    setMsg(`Editing “${s.name}”. The password stays unless you remove or replace it.`);
     setErr("");
   }
 
   function resetForm() {
     setEditingId(null);
     setSrc(emptySrc);
+    setSrcClear([]);
   }
 
   async function saveSource() {
     setErr("");
     try {
       if (editingId) {
-        await api.put(`/api/ups/sources/${editingId}`, src);
+        await api.put(`/api/ups/sources/${editingId}`, { ...src, clear_fields: srcClear });
         setMsg("UPS source updated.");
       } else {
         await api.post("/api/ups/sources", src);
@@ -272,14 +278,28 @@ export function Settings() {
             />
           </div>
           <div className="space-y-1">
-            <label>Heartbeat URL {settings.heartbeat_url_set ? "(saved)" : "(optional)"}</label>
+            <label>Heartbeat URL (optional)</label>
+            {settings.heartbeat_url_set && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 text-sm">
+                <span className="text-slate-400">
+                  Saved <span className="tracking-widest text-slate-300">•••</span>
+                </span>
+                <button
+                  type="button"
+                  className="text-xs text-rose hover:underline"
+                  onClick={() => saveSettings({ heartbeat_url: "" })}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
             <input
               className="w-full"
-              placeholder={settings.heartbeat_url_set ? "saved — paste a new one, or a space to clear" : "Uptime Kuma push / healthchecks.io URL"}
+              placeholder={settings.heartbeat_url_set ? "Paste a new URL to replace the saved one" : "Uptime Kuma push / healthchecks.io URL"}
               onBlur={(e) => {
-                const v = e.target.value;
-                if (v === "") return;
-                saveSettings({ heartbeat_url: v.trim() });
+                const v = e.target.value.trim();
+                if (!v) return;
+                saveSettings({ heartbeat_url: v });
                 e.target.value = "";
               }}
             />
@@ -317,6 +337,7 @@ export function Settings() {
                   className="btn-ghost"
                   onClick={() => {
                     setEditingChannelId(ch.id);
+                    setChClear([]);
                     setChForm({
                       name: ch.name,
                       kind: ch.kind,
@@ -371,15 +392,18 @@ export function Settings() {
               <option value="webhook">Generic webhook</option>
             </select>
           </div>
-          <div className="space-y-1">
-            <label>URL {editingChannelId ? "(blank = keep the saved one)" : ""}</label>
-            <input
-              className="w-full"
-              value={chForm.url}
-              placeholder={editingChannelId ? "saved — paste a new one to replace it" : "https://discord.com/api/webhooks/…"}
-              onChange={(e) => setChForm({ ...chForm, url: e.target.value })}
-            />
-          </div>
+          <KeptField
+            label="URL"
+            type="text"
+            autoComplete="off"
+            placeholder="https://discord.com/api/webhooks/…"
+            saved={Boolean(editingChannelId && channels.find((c) => c.id === editingChannelId)?.has_url)}
+            cleared={chClear.includes("url")}
+            onClear={() => { setChForm({ ...chForm, url: "" }); setChClear((c) => c.includes("url") ? c : [...c, "url"]); }}
+            onUndo={() => setChClear((c) => c.filter((x) => x !== "url"))}
+            value={chForm.url}
+            onChange={(v) => { setChForm({ ...chForm, url: v }); setChClear((c) => c.filter((x) => x !== "url")); }}
+          />
           {chForm.kind === "ntfy" && (
             <div className="space-y-1">
               <label>ntfy topic</label>
@@ -387,10 +411,15 @@ export function Settings() {
             </div>
           )}
           {chForm.kind === "gotify" && (
-            <div className="space-y-1">
-              <label>Token {editingChannelId ? "(blank = keep)" : ""}</label>
-              <input className="w-full" type="password" value={chForm.token} onChange={(e) => setChForm({ ...chForm, token: e.target.value })} />
-            </div>
+            <KeptField
+              label="Token"
+              saved={Boolean(editingChannelId && channels.find((c) => c.id === editingChannelId)?.has_token)}
+              cleared={chClear.includes("token")}
+              onClear={() => { setChForm({ ...chForm, token: "" }); setChClear((c) => c.includes("token") ? c : [...c, "token"]); }}
+              onUndo={() => setChClear((c) => c.filter((x) => x !== "token"))}
+              value={chForm.token}
+              onChange={(v) => { setChForm({ ...chForm, token: v }); setChClear((c) => c.filter((x) => x !== "token")); }}
+            />
           )}
           <label className="flex items-center gap-2 text-sm normal-case tracking-normal mt-6">
             <input type="checkbox" checked={chForm.enabled} onChange={(e) => setChForm({ ...chForm, enabled: e.target.checked })} />
@@ -403,13 +432,14 @@ export function Settings() {
             onClick={async () => {
               try {
                 if (editingChannelId) {
-                  await api.put(`/api/notify-channels/${editingChannelId}`, chForm);
+                  await api.put(`/api/notify-channels/${editingChannelId}`, { ...chForm, clear_fields: chClear });
                   setMsg("Channel updated.");
                 } else {
                   await api.post("/api/notify-channels", chForm);
                   setMsg("Channel added.");
                 }
                 setEditingChannelId(null);
+                setChClear([]);
                 setChForm({ name: "Discord", kind: "discord", url: "", topic: "", token: "", enabled: true });
                 setErr("");
                 await load();
@@ -425,6 +455,7 @@ export function Settings() {
               className="btn-ghost"
               onClick={() => {
                 setEditingChannelId(null);
+                setChClear([]);
                 setChForm({ name: "Discord", kind: "discord", url: "", topic: "", token: "", enabled: true });
               }}
             >
@@ -515,8 +546,16 @@ export function Settings() {
             <input className="w-full" value={src.username} onChange={(e) => setSrc({ ...src, username: e.target.value })} autoComplete="off" />
           </div>
           <div className="space-y-1">
-            <label>Password {editingId ? "(blank = keep)" : ""}</label>
-            <input className="w-full" type="password" value={src.password} onChange={(e) => setSrc({ ...src, password: e.target.value })} autoComplete="new-password" />
+            <KeptField
+              label="Password"
+              saved={Boolean(editingId && sources.find((u) => u.id === editingId)?.has_password)}
+              value={src.password}
+              onChange={(v) => { setSrc({ ...src, password: v }); setSrcClear((c) => c.filter((x) => x !== "password")); }}
+              cleared={srcClear.includes("password")}
+              onClear={() => { setSrc({ ...src, password: "" }); setSrcClear((c) => c.includes("password") ? c : [...c, "password"]); }}
+              onUndo={() => setSrcClear((c) => c.filter((x) => x !== "password"))}
+              autoComplete="new-password"
+            />
           </div>
           <label className="flex items-center gap-2 text-sm normal-case tracking-normal mt-6">
             <input type="checkbox" checked={src.enabled} onChange={(e) => setSrc({ ...src, enabled: e.target.checked })} />

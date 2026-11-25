@@ -1,8 +1,11 @@
 import { Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { HelpTip } from "../components/HelpTip";
+import { KeptField } from "../components/KeptField";
 import { ConfirmDialog } from "../confirm";
 import { useFeedback } from "../feedback";
+import { HELP_KEY_PASSPHRASE, HELP_PINNED_KEY, HELP_SSH_KEY, HELP_TLS } from "../help/hostHelp";
 import { HOST_KIND_HELP } from "../labels";
 import type { Host, Target } from "../types";
 
@@ -66,6 +69,7 @@ export function Inventory() {
   const [hostForm, setHostForm] = useState(emptyHost);
   const [targetForm, setTargetForm] = useState(emptyTarget);
   const [editingHostId, setEditingHostId] = useState<number | null>(null);
+  const [clearFields, setClearFields] = useState<string[]>([]);
   const [editingTargetId, setEditingTargetId] = useState<number | null>(null);
   const [showHostForm, setShowHostForm] = useState(false);
   const [showTargetForm, setShowTargetForm] = useState(false);
@@ -92,6 +96,46 @@ export function Inventory() {
     setShowHostForm(false);
     setEditingHostId(null);
     setHostForm(emptyHost);
+    setClearFields([]);
+  }
+
+  const editingHost = editingHostId ? hosts.find((h) => h.id === editingHostId) : undefined;
+  const savedCreds = new Set(editingHost?.credential_keys || []);
+
+  function isCleared(field: string) {
+    return clearFields.includes(field);
+  }
+  function markClear(field: string) {
+    setClearFields((prev) => {
+      const next = prev.includes(field) ? prev : [...prev, field];
+      if (field === "private_key" && !next.includes("key_passphrase")) next.push("key_passphrase");
+      return next;
+    });
+    if (field === "private_key") setHostForm((f) => ({ ...f, private_key: "", key_passphrase: "" }));
+    if (field === "key_passphrase") setHostForm((f) => ({ ...f, key_passphrase: "" }));
+    if (field === "password") setHostForm((f) => ({ ...f, password: "" }));
+    if (field === "token_secret") setHostForm((f) => ({ ...f, token_secret: "" }));
+    if (field === "token_id") setHostForm((f) => ({ ...f, token_id: "" }));
+    if (field === "username") setHostForm((f) => ({ ...f, username: "" }));
+    if (field === "ca_pem") setHostForm((f) => ({ ...f, ca_pem: "" }));
+  }
+  function undoClear(field: string) {
+    setClearFields((prev) => {
+      let next = prev.filter((f) => f !== field);
+      if (field === "private_key") next = next.filter((f) => f !== "key_passphrase");
+      return next;
+    });
+  }
+
+  async function forgetPinnedKey(hostId: number, name: string) {
+    try {
+      await api.post(`/api/hosts/${hostId}/forget-host-key`);
+      await load();
+      setMsg(`Forgot the pinned SSH key for ${name}. Click Test to pin the new one.`);
+      setErr("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not forget the key");
+    }
   }
 
   function closeTargetForm() {
@@ -123,7 +167,8 @@ export function Inventory() {
       node_a: String(h.extra?.node_a || ""),
       node_b: String(h.extra?.node_b || ""),
     });
-    setMsg(`Editing host “${h.name}”. Leave secrets blank to keep the current ones.`);
+    setClearFields([]);
+    setMsg(`Editing host “${h.name}”. Saved secrets stay unless you remove or replace them.`);
     setErr("");
   }
 
@@ -150,17 +195,17 @@ export function Inventory() {
     setErr("");
     const creds: Record<string, string> = {};
     if (hostForm.kind === "proxmox" || hostForm.kind === "pbs") {
-      if (hostForm.token_id) creds.token_id = hostForm.token_id;
-      if (hostForm.token_secret) creds.token_secret = hostForm.token_secret;
+      if (hostForm.token_id && !isCleared("token_id")) creds.token_id = hostForm.token_id;
+      if (hostForm.token_secret && !isCleared("token_secret")) creds.token_secret = hostForm.token_secret;
     } else {
-      if (hostForm.username) creds.username = hostForm.username;
-      if (hostForm.password) creds.password = hostForm.password;
-      if (hostForm.private_key) creds.private_key = hostForm.private_key;
-      if (hostForm.key_passphrase) creds.key_passphrase = hostForm.key_passphrase;
+      if (hostForm.username && !isCleared("username")) creds.username = hostForm.username;
+      if (hostForm.password && !isCleared("password")) creds.password = hostForm.password;
+      if (hostForm.private_key && !isCleared("private_key")) creds.private_key = hostForm.private_key;
+      if (hostForm.key_passphrase && !isCleared("key_passphrase")) creds.key_passphrase = hostForm.key_passphrase;
     }
     const existing = editingHostId ? hosts.find((h) => h.id === editingHostId) : undefined;
     const extra: Record<string, unknown> = { ...(existing?.extra || {}) };
-    if (hostForm.ca_pem.trim()) extra.ca_pem = hostForm.ca_pem.trim();
+    if (hostForm.ca_pem.trim() && !isCleared("ca_pem")) extra.ca_pem = hostForm.ca_pem.trim();
     else delete extra.ca_pem;
     if (hostForm.kind === "docker") {
       extra.access = hostForm.access;
@@ -185,6 +230,7 @@ export function Inventory() {
       verify_tls: hostForm.verify_tls,
       credentials: creds,
       extra,
+      clear_fields: clearFields,
     };
     try {
       if (editingHostId) {
@@ -553,38 +599,84 @@ export function Inventory() {
         )}
         {(hostForm.kind === "proxmox" || hostForm.kind === "pbs") ? (
           <div className="grid md:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label>
-                API token id ({hostForm.kind === "pbs" ? "user@pbs!name or user@pam!name" : "user@pam!name"})
-                {editingHostId ? " — blank keeps current" : ""}
-              </label>
-              <input className="w-full" value={hostForm.token_id} onChange={(e) => setHostForm({ ...hostForm, token_id: e.target.value })} />
-            </div>
-            <div className="space-y-1">
-              <label>API token secret</label>
-              <input className="w-full" type="password" value={hostForm.token_secret} onChange={(e) => setHostForm({ ...hostForm, token_secret: e.target.value })} />
-            </div>
+            <KeptField
+              label={<>API token id ({hostForm.kind === "pbs" ? "user@pbs!name or user@pam!name" : "user@pam!name"})</>}
+              type="text"
+              autoComplete="off"
+              saved={savedCreds.has("token_id")}
+              cleared={isCleared("token_id")}
+              onClear={() => markClear("token_id")}
+              onUndo={() => undoClear("token_id")}
+              value={hostForm.token_id}
+              onChange={(v) => setHostForm({ ...hostForm, token_id: v })}
+            />
+            <KeptField
+              label="API token secret"
+              saved={savedCreds.has("token_secret")}
+              cleared={isCleared("token_secret")}
+              onClear={() => markClear("token_secret")}
+              onUndo={() => undoClear("token_secret")}
+              value={hostForm.token_secret}
+              onChange={(v) => setHostForm({ ...hostForm, token_secret: v })}
+            />
           </div>
         ) : (
           <div className="grid md:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label>Username{editingHostId ? " — blank keeps current" : ""}</label>
-              <input className="w-full" value={hostForm.username} onChange={(e) => setHostForm({ ...hostForm, username: e.target.value })} />
-            </div>
-            <div className="space-y-1">
-              <label>Password</label>
-              <input className="w-full" type="password" value={hostForm.password} onChange={(e) => setHostForm({ ...hostForm, password: e.target.value })} />
-            </div>
+            <KeptField
+              label="Username"
+              type="text"
+              autoComplete="off"
+              saved={savedCreds.has("username")}
+              cleared={isCleared("username")}
+              onClear={() => markClear("username")}
+              onUndo={() => undoClear("username")}
+              value={hostForm.username}
+              onChange={(v) => setHostForm({ ...hostForm, username: v })}
+            />
+            <KeptField
+              label="Password"
+              saved={savedCreds.has("password")}
+              cleared={isCleared("password")}
+              onClear={() => markClear("password")}
+              onUndo={() => undoClear("password")}
+              value={hostForm.password}
+              onChange={(v) => setHostForm({ ...hostForm, password: v })}
+            />
             {["ssh", "k3s", "docker", "omv"].includes(hostForm.kind) && (
               <>
-                <div className="md:col-span-2 space-y-1">
-                  <label>SSH private key (optional){editingHostId ? " — blank keeps current" : ""}</label>
-                  <textarea className="w-full" rows={3} value={hostForm.private_key} onChange={(e) => setHostForm({ ...hostForm, private_key: e.target.value })} />
-                </div>
-                <div className="space-y-1">
-                  <label>Key passphrase (if the key has one)</label>
-                  <input className="w-full" type="password" value={hostForm.key_passphrase} onChange={(e) => setHostForm({ ...hostForm, key_passphrase: e.target.value })} />
-                </div>
+                <KeptField
+                  className="md:col-span-2"
+                  label={
+                    <>
+                      SSH private key (optional)
+                      <HelpTip title={HELP_SSH_KEY.title}>{HELP_SSH_KEY.body}</HelpTip>
+                    </>
+                  }
+                  multiline
+                  monospaced
+                  rows={3}
+                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                  saved={savedCreds.has("private_key")}
+                  cleared={isCleared("private_key")}
+                  onClear={() => markClear("private_key")}
+                  onUndo={() => undoClear("private_key")}
+                  value={hostForm.private_key}
+                  onChange={(v) => setHostForm({ ...hostForm, private_key: v })}
+                />
+                <KeptField
+                  label={
+                    <>
+                      Key passphrase
+                      <HelpTip title={HELP_KEY_PASSPHRASE.title}>{HELP_KEY_PASSPHRASE.body}</HelpTip>
+                    </>
+                  }
+                  saved={savedCreds.has("key_passphrase")}
+                  cleared={isCleared("key_passphrase")}
+                  onClear={() => markClear("key_passphrase")}
+                  onUndo={() => undoClear("key_passphrase")}
+                  value={hostForm.key_passphrase}
+                  onChange={(v) => setHostForm({ ...hostForm, key_passphrase: v })}
+                />
               </>
             )}
           </div>
@@ -598,23 +690,64 @@ export function Inventory() {
                 onChange={(e) => setHostForm({ ...hostForm, verify_tls: e.target.checked })}
               />
               Verify the HTTPS certificate
+              <HelpTip title={HELP_TLS.title}>{HELP_TLS.body}</HelpTip>
             </label>
             <p className="text-[11px] text-slate-500">
-              Self-signed certificate? Paste it (or your lab CA) below instead of turning this off. Turning it off lets
-              anyone on the network pretend to be this host and capture its credentials.
+              Self-signed certificate? Paste it (or your lab CA) below instead of turning this off.
             </p>
             {hostForm.verify_tls && (
               <div className="md:col-span-2 space-y-1">
-                <label>Trusted certificate (PEM, optional)</label>
-                <textarea
-                  className="w-full mono text-xs"
-                  rows={3}
-                  placeholder="-----BEGIN CERTIFICATE-----"
-                  value={hostForm.ca_pem}
-                  onChange={(e) => setHostForm({ ...hostForm, ca_pem: e.target.value })}
-                />
+                <label className="flex items-center gap-1.5">
+                  Trusted certificate (PEM, optional)
+                  <HelpTip title={HELP_TLS.title}>{HELP_TLS.body}</HelpTip>
+                </label>
+                {isCleared("ca_pem") ? (
+                  <div className="flex items-center justify-between gap-2 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-sm">
+                    <span className="text-amber">Certificate will be removed when you save</span>
+                    <button type="button" className="text-xs text-slate-200 hover:underline" onClick={() => undoClear("ca_pem")}>
+                      Undo
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      className="w-full mono text-xs"
+                      rows={3}
+                      placeholder="-----BEGIN CERTIFICATE-----"
+                      value={hostForm.ca_pem}
+                      onChange={(e) => setHostForm({ ...hostForm, ca_pem: e.target.value })}
+                    />
+                    {(hostForm.ca_pem.trim() || editingHost?.extra?.ca_pem) && (
+                      <button type="button" className="text-[11px] text-rose hover:underline" onClick={() => markClear("ca_pem")}>
+                        Remove certificate
+                      </button>
+                    )}
+                  </>
+                )}
+                {hostForm.verify_tls && (isCleared("ca_pem") || !hostForm.ca_pem.trim()) && (
+                  <p className="text-[11px] text-amber">
+                    Verification is on and no trusted certificate will be stored. A self-signed host will fail Test
+                    unless you paste the cert, or turn verification off (less safe).
+                  </p>
+                )}
               </div>
             )}
+          </div>
+        )}
+        {editingHost && typeof editingHost.extra?.ssh_host_key === "string" && (
+          <div className="rounded-lg border border-ink-600 bg-ink-900 px-3 py-2 space-y-1">
+            <div className="flex items-center gap-1.5">
+              <label className="!normal-case !tracking-normal !text-xs !text-slate-400">Pinned SSH host key</label>
+              <HelpTip title={HELP_PINNED_KEY.title}>{HELP_PINNED_KEY.body}</HelpTip>
+            </div>
+            <div className="text-[11px] text-slate-500 mono break-all">{String(editingHost.extra.ssh_host_key)}</div>
+            <button
+              type="button"
+              className="text-xs text-amber hover:underline"
+              onClick={() => forgetPinnedKey(editingHost.id, editingHost.name)}
+            >
+              Forget pinned key
+            </button>
           </div>
         )}
         <div className="flex gap-2">
@@ -645,21 +778,14 @@ export function Inventory() {
               <div className="text-[11px] text-amber">HTTPS certificate not verified — edit to turn it on.</div>
             )}
             {typeof h.extra?.ssh_host_key === "string" && (
-              <div className="text-[11px] text-slate-500 mono break-all">
-                SSH key pinned: {String(h.extra.ssh_host_key)}{" "}
-                <button
-                  className="underline"
-                  onClick={async () => {
-                    try {
-                      await api.post(`/api/hosts/${h.id}/forget-host-key`);
-                      await load();
-                      setMsg(`Forgot the SSH key for ${h.name}. Test it again to pin the new one.`);
-                    } catch (e) {
-                      setErr(e instanceof Error ? e.message : "Could not forget the key");
-                    }
-                  }}
-                >
-                  forget
+              <div className="text-[11px] text-slate-500 space-y-1">
+                <div className="flex items-center gap-1">
+                  <span>SSH key pinned</span>
+                  <HelpTip title={HELP_PINNED_KEY.title}>{HELP_PINNED_KEY.body}</HelpTip>
+                </div>
+                <div className="mono break-all">{String(h.extra.ssh_host_key)}</div>
+                <button type="button" className="underline" onClick={() => forgetPinnedKey(h.id, h.name)}>
+                  Forget pinned key
                 </button>
               </div>
             )}
