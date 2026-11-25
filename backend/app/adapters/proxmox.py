@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 import httpx
 
-from app.tlsutil import explain_tls_error, is_tls_error
+from app.tlsutil import TLSVerificationError, explain_tls_error, is_tls_error
 
 
 def split_api_token(token_id: str, token_secret: str) -> tuple[str, str]:
@@ -70,7 +70,7 @@ class ProxmoxAdapter:
                 resp = await client.request(method, url, **kwargs)
         except Exception as exc:
             if is_tls_error(exc):
-                raise RuntimeError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
+                raise TLSVerificationError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
             raise
         if resp.status_code >= 400:
             detail = (resp.text or "")[:400]

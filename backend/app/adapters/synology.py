@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from app.redact import redact
-from app.tlsutil import explain_tls_error, is_tls_error
+from app.tlsutil import TLSVerificationError, explain_tls_error, is_http_url, is_tls_error, uses_tls
 
 
 class SynologyAdapter:
@@ -22,6 +22,8 @@ class SynologyAdapter:
         use_https: bool = True,
         timeout: float = 20.0,
     ) -> None:
+        if is_http_url(address):
+            use_https = False
         scheme = "https" if use_https else "http"
         if address.startswith("http"):
             self.base = address.rstrip("/")
@@ -30,7 +32,7 @@ class SynologyAdapter:
         self.username = username
         self.password = password
         self.otp = otp
-        self.verify = verify_tls
+        self.verify = verify_tls if uses_tls(self.base, use_https) else False
         self.timeout = timeout
         self._sid = ""
 
@@ -43,7 +45,7 @@ class SynologyAdapter:
                 resp = await client.post(url, data={k: str(v) for k, v in params.items()})
             except httpx.HTTPError as exc:
                 if is_tls_error(exc):
-                    raise RuntimeError(explain_tls_error(exc, address=self.base, verify=self.verify)) from None
+                    raise TLSVerificationError(explain_tls_error(exc, address=self.base, verify=self.verify)) from None
                 raise RuntimeError(f"Synology {path}: {type(exc).__name__}: {redact(str(exc))}") from None
             if resp.status_code >= 400:
                 raise RuntimeError(f"Synology {path} answered HTTP {resp.status_code}")

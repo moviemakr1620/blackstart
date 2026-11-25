@@ -49,6 +49,7 @@ def tls_verify(host: Host, *, ca_pem: str | None = None, verify_tls: bool | None
         ca_pem=pem,
         address=host.address,
         skip_hostname=bool(extra.get("ca_skip_hostname")),
+        use_https=extra.get("https", True),
     )
 
 
@@ -84,16 +85,20 @@ def pbs_from(host: Host) -> PbsAdapter:
 
 
 def synology_from(host: Host, address: str | None = None) -> SynologyAdapter:
+    from app.tlsutil import is_http_url
+
     c = _creds(host)
     extra = _extra(host)
+    target = address or host.address
+    use_https = bool(extra.get("https", True)) and not is_http_url(target or "")
     return SynologyAdapter(
-        address=address or host.address,
-        port=host.port or 5001,
+        address=target,
+        port=host.port or (5001 if use_https else 5000),
         username=c.get("username") or "",
         password=c.get("password") or "",
         otp=c.get("otp") or "",
-        verify_tls=tls_verify(host),
-        use_https=extra.get("https", True),
+        verify_tls=tls_verify(host) if use_https else False,
+        use_https=use_https,
     )
 
 
@@ -220,13 +225,16 @@ def omv_from(host: Host) -> OmvAdapter:
         ssh = ssh_from(host)
         if (ssh.port or 22) == (host.port or 443):
             ssh.port = int(extra.get("ssh_port") or 22)
+    from app.tlsutil import is_http_url
+
+    use_https = bool(extra.get("https", True)) and not is_http_url(host.address or "")
     return OmvAdapter(
         address=host.address,
-        port=host.port or 443,
+        port=host.port or (443 if use_https else 80),
         username=c.get("username") or "",
         password=c.get("password") or "",
-        verify_tls=tls_verify(host),
-        use_https=extra.get("https", True),
+        verify_tls=tls_verify(host) if use_https else False,
+        use_https=use_https,
         ssh=ssh,
     )
 

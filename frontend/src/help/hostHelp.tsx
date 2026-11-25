@@ -53,8 +53,13 @@ export const HELP_TLS = {
       </p>
       <p>
         Home-lab Proxmox, PBS, Synology, and OMV usually use a self-signed certificate. Leave verification on and paste
-        the lab CA <em>or</em> the server certificate itself — either one works. If you connect by IP, Blackstart still
-        checks the signature and does not require the name on the certificate to match the IP.
+        the lab CA <em>or</em> the certificate the server actually presents — either one works. If you connect by IP,
+        Blackstart still checks the signature and does not require the name on the certificate to match the IP.
+      </p>
+      <p>
+        If Test still fails, compare the fingerprints in the error (served vs pasted). A Proxmox root that was
+        regenerated will not authenticate an older node certificate; paste the first PEM block from openssl s_client, or
+        renew the node cert on the host.
       </p>
       <p className="font-medium text-slate-200">How to get the certificate</p>
       <ul className="list-disc pl-4 space-y-1">

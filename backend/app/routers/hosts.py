@@ -138,7 +138,7 @@ async def test_host(
     """Test uses the saved host. Optional body (verify_tls, ca_pem) overrides for this call only
     — blank ca_pem keeps the stored certificate (same as the form).
     """
-    from app.tlsutil import explain_tls_error, is_tls_error
+    from app.tlsutil import TLSVerificationError, explain_tls_error, is_tls_error
 
     row = await session.get(Host, host_id)
     if not row:
@@ -212,11 +212,13 @@ async def test_host(
         raise
     except Exception as exc:  # noqa: BLE001
         message = str(exc)
-        if is_tls_error(exc):
+        if isinstance(exc, TLSVerificationError):
+            message = str(exc)
+        elif is_tls_error(exc):
             from app.engine.executor import tls_verify
             message = explain_tls_error(exc, address=row.address, verify=tls_verify(row))
         _restore_unsaved_tls(row, saved_verify, saved_extra)
-        row.last_error = redact(message)
+        row.last_error = redact(message, limit=2500)
         await session.commit()
         raise HTTPException(400, row.last_error) from exc
 

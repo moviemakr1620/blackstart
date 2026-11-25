@@ -40,6 +40,7 @@ const emptyHost = {
   key_passphrase: "",
   verify_tls: true,
   ca_pem: "",
+  https: true,
   access: "ssh",
   ha: false,
   mac: "",
@@ -160,6 +161,7 @@ export function Inventory() {
       key_passphrase: "",
       verify_tls: h.verify_tls,
       ca_pem: String(h.extra?.ca_pem || ""),
+      https: h.extra?.https !== false && !String(h.address || "").toLowerCase().startsWith("http://"),
       access: String(h.extra?.access || (h.kind === "docker" ? "ssh" : "api")),
       ha: Boolean(h.extra?.ha),
       mac: String(h.extra?.mac || ""),
@@ -210,6 +212,9 @@ export function Inventory() {
     if (hostForm.kind === "docker") {
       extra.access = hostForm.access;
       if (hostForm.address.startsWith("unix")) extra.socket = hostForm.address;
+    }
+    if (hostForm.kind === "synology" || hostForm.kind === "omv") {
+      extra.https = hostForm.https && !hostForm.address.trim().toLowerCase().startsWith("http://");
     }
     if (hostForm.kind === "synology") {
       extra.ha = hostForm.ha;
@@ -437,7 +442,7 @@ export function Inventory() {
         </p>
       </header>
       {msg && <div className="text-sm text-mint">{msg}</div>}
-      {err && <div className="text-sm text-rose">{err}</div>}
+      {err && <div className="text-sm text-rose whitespace-pre-wrap break-words">{err}</div>}
 
       <div className="flex flex-wrap gap-2">
         {!showHostForm && (
@@ -514,7 +519,14 @@ export function Inventory() {
               className="w-full"
               placeholder="192.168.1.10 or unix:///var/run/docker.sock"
               value={hostForm.address}
-              onChange={(e) => setHostForm({ ...hostForm, address: e.target.value })}
+              onChange={(e) => {
+                const address = e.target.value;
+                const http = address.trim().toLowerCase().startsWith("http://");
+                const next = { ...hostForm, address, https: http ? false : hostForm.https };
+                if (http && hostForm.kind === "omv" && (hostForm.port === 443 || !hostForm.port)) next.port = 80;
+                if (http && hostForm.kind === "synology" && hostForm.port === 5001) next.port = 5000;
+                setHostForm(next);
+              }}
             />
           </div>
           <div className="space-y-1">
@@ -527,6 +539,28 @@ export function Inventory() {
             />
           </div>
         </div>
+        {["omv", "synology"].includes(hostForm.kind) && (
+          <label className="flex items-center gap-2 text-sm normal-case tracking-normal">
+            <input
+              type="checkbox"
+              checked={hostForm.https && !hostForm.address.trim().toLowerCase().startsWith("http://")}
+              onChange={(e) => {
+                const https = e.target.checked;
+                const next = { ...hostForm, https };
+                if (hostForm.kind === "omv") {
+                  if (!https && (hostForm.port === 443 || !hostForm.port)) next.port = 80;
+                  if (https && (hostForm.port === 80 || !hostForm.port)) next.port = 443;
+                }
+                if (hostForm.kind === "synology") {
+                  if (!https && hostForm.port === 5001) next.port = 5000;
+                  if (https && hostForm.port === 5000) next.port = 5001;
+                }
+                setHostForm(next);
+              }}
+            />
+            Use HTTPS
+          </label>
+        )}
         {HOST_KIND_HELP[hostForm.kind] && (
           <p className="text-xs text-slate-500">{HOST_KIND_HELP[hostForm.kind]}</p>
         )}
@@ -683,6 +717,21 @@ export function Inventory() {
         )}
         {["proxmox", "pbs", "synology", "omv"].includes(hostForm.kind) && (
           <div className="grid md:grid-cols-2 gap-3">
+            {(["omv", "synology"].includes(hostForm.kind) &&
+              (!hostForm.https || hostForm.address.trim().toLowerCase().startsWith("http://"))) ? (
+              <div className="md:col-span-2 space-y-1">
+                <label className="flex items-center gap-2 text-sm normal-case tracking-normal text-slate-500">
+                  <input type="checkbox" checked={false} disabled />
+                  Verify the HTTPS certificate
+                  <HelpTip title={HELP_TLS.title}>{HELP_TLS.body}</HelpTip>
+                </label>
+                <p className="text-[11px] text-slate-500">
+                  This host uses HTTP, so certificate verification does not apply. Tick Use HTTPS (and usually port 443
+                  for OMV or 5001 for Synology) if the web UI is served over TLS.
+                </p>
+              </div>
+            ) : (
+            <>
             <label className="flex items-center gap-2 text-sm normal-case tracking-normal">
               <input
                 type="checkbox"
@@ -731,6 +780,8 @@ export function Inventory() {
                   </p>
                 )}
               </div>
+            )}
+            </>
             )}
           </div>
         )}
@@ -786,7 +837,7 @@ export function Inventory() {
                 {h.last_error ? "error" : h.last_ok_at ? "ok" : "idle"}
               </span>
             </div>
-            {h.last_error && <div className="text-xs text-rose break-all">{h.last_error}</div>}
+            {h.last_error && <div className="text-xs text-rose whitespace-pre-wrap break-words">{h.last_error}</div>}
             {h.credentials_error && <div className="text-xs text-rose">{h.credentials_error}</div>}
             {!h.verify_tls && ["proxmox", "pbs", "synology", "omv"].includes(h.kind) && (
               <div className="text-[11px] text-amber">HTTPS certificate not verified — edit to turn it on.</div>

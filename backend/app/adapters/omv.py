@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from app.tlsutil import explain_tls_error, is_tls_error
+from app.tlsutil import TLSVerificationError, explain_tls_error, is_http_url, is_tls_error, uses_tls
 
 from app.adapters.ssh import SshAdapter
 
@@ -23,6 +23,8 @@ class OmvAdapter:
         timeout: float = 15.0,
         ssh: SshAdapter | None = None,
     ) -> None:
+        if is_http_url(address):
+            use_https = False
         scheme = "https" if use_https else "http"
         if address.startswith("http"):
             self.base = address.rstrip("/")
@@ -30,7 +32,8 @@ class OmvAdapter:
             self.base = f"{scheme}://{address}:{port or (443 if use_https else 80)}"
         self.username = username
         self.password = password
-        self.verify = verify_tls
+        # httpx verify is ignored for http://; force it off so a leftover SSLContext is never applied.
+        self.verify = verify_tls if uses_tls(self.base, use_https) else False
         self.timeout = timeout
         self.ssh = ssh
         self._session = ""
@@ -48,7 +51,7 @@ class OmvAdapter:
                 data = resp.json()
         except Exception as exc:
             if is_tls_error(exc):
-                raise RuntimeError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
+                raise TLSVerificationError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
             raise
         if isinstance(data, dict) and data.get("error"):
             raise RuntimeError(str(data.get("error")))
