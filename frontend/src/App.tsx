@@ -5,6 +5,7 @@ import { Layout } from "./layout";
 import { Dashboard } from "./pages/Dashboard";
 import { History } from "./pages/History";
 import { Inventory } from "./pages/Inventory";
+import { ChangePassword } from "./pages/ChangePassword";
 import { Login } from "./pages/Login";
 import { Playbooks } from "./pages/Playbooks";
 import { Settings } from "./pages/Settings";
@@ -18,6 +19,14 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route
+        path="/change-password"
+        element={
+          <Private>
+            <ChangePassword />
+          </Private>
+        }
+      />
       <Route
         path="/"
         element={

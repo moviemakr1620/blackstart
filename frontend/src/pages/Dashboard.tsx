@@ -7,7 +7,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, wsUrl } from "../api";
+import { api, openLiveSocket } from "../api";
 import { BatteryRing, formatRuntime, statusLabel } from "../components/BatteryRing";
 import { formatDateTime, formatTime } from "../time";
 import type { AppSettings, Policy, Sample, UpsStatus } from "../types";
@@ -41,19 +41,13 @@ export function Dashboard() {
 
   useEffect(() => {
     refresh().catch(console.error);
-    const ws = new WebSocket(wsUrl());
-    ws.onmessage = (msg) => {
-      try {
-        const data = JSON.parse(msg.data);
-        if (data.event === "ups.sample") setUps((prev) => ({ ...prev, ...data.payload }));
-        if (data.event === "run.event") {
-          setEvents((prev) => [...prev.slice(-80), { id: Date.now(), ts: new Date().toISOString(), ...data.payload }]);
-        }
-        if (data.event === "hello") setUps((prev) => ({ ...prev, ...(data.payload?.ups || {}) }));
-      } catch {
-        /* ignore */
+    const ws = openLiveSocket((data) => {
+      if (data.event === "ups.sample") setUps((prev) => ({ ...prev, ...data.payload }));
+      if (data.event === "run.event") {
+        setEvents((prev) => [...prev.slice(-80), { id: Date.now(), ts: new Date().toISOString(), ...data.payload }]);
       }
-    };
+      if (data.event === "hello") setUps((prev) => ({ ...prev, ...(data.payload?.ups || {}) }));
+    });
     const poll = setInterval(() => refresh().catch(() => undefined), 8000);
     return () => {
       ws.close();

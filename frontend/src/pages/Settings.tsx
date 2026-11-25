@@ -261,6 +261,33 @@ export function Settings() {
               onChange={(e) => saveSettings({ default_restore_hold_sec: Number(e.target.value) })}
             />
           </div>
+          <div className="space-y-1">
+            <label>Alert if the UPS feed is silent for (seconds)</label>
+            <input
+              className="w-full"
+              type="number"
+              min={10}
+              value={settings.ups_stale_alert_sec}
+              onChange={(e) => saveSettings({ ups_stale_alert_sec: Number(e.target.value) })}
+            />
+          </div>
+          <div className="space-y-1">
+            <label>Heartbeat URL {settings.heartbeat_url_set ? "(saved)" : "(optional)"}</label>
+            <input
+              className="w-full"
+              placeholder={settings.heartbeat_url_set ? "saved — paste a new one, or a space to clear" : "Uptime Kuma push / healthchecks.io URL"}
+              onBlur={(e) => {
+                const v = e.target.value;
+                if (v === "") return;
+                saveSettings({ heartbeat_url: v.trim() });
+                e.target.value = "";
+              }}
+            />
+            <p className="text-[11px] text-slate-500">
+              Blackstart opens this URL every minute. Point it at a monitor outside the lab so you hear about it if
+              Blackstart itself goes down.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -279,7 +306,11 @@ export function Settings() {
                   {ch.name} <span className="text-slate-500">({ch.kind})</span>
                   {!ch.enabled && <span className="text-amber text-xs ml-2">off</span>}
                 </div>
-                <div className="text-[11px] text-slate-500 mono truncate max-w-md">{ch.url || ch.topic || "—"}</div>
+                <div className="text-[11px] text-slate-500 mono truncate max-w-md">
+                  {ch.url_hint || "—"}
+                  {ch.topic ? ` · ${ch.topic}` : ""}
+                </div>
+                {ch.error && <div className="text-[11px] text-rose">{ch.error}</div>}
               </div>
               <div className="flex gap-2">
                 <button
@@ -289,7 +320,7 @@ export function Settings() {
                     setChForm({
                       name: ch.name,
                       kind: ch.kind,
-                      url: ch.url,
+                      url: "",
                       topic: ch.topic,
                       token: "",
                       enabled: ch.enabled,
@@ -341,11 +372,11 @@ export function Settings() {
             </select>
           </div>
           <div className="space-y-1">
-            <label>URL</label>
+            <label>URL {editingChannelId ? "(blank = keep the saved one)" : ""}</label>
             <input
               className="w-full"
               value={chForm.url}
-              placeholder="https://discord.com/api/webhooks/…"
+              placeholder={editingChannelId ? "saved — paste a new one to replace it" : "https://discord.com/api/webhooks/…"}
               onChange={(e) => setChForm({ ...chForm, url: e.target.value })}
             />
           </div>

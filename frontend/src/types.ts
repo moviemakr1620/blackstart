@@ -52,6 +52,7 @@ export type Host = {
   last_ok_at?: string | null;
   last_error: string;
   credential_keys: string[];
+  credentials_error?: string;
 };
 
 export type Target = {
@@ -119,6 +120,7 @@ export type Policy = {
   ups_source_id: number | null;
   priority: number;
   steps: PolicyStep[];
+  binding_warning?: string;
 };
 
 export type Run = {
@@ -155,20 +157,21 @@ export type NotifyChannel = {
   name: string;
   kind: "discord" | "ntfy" | "gotify" | "webhook";
   enabled: boolean;
-  url: string;
+  url_hint: string;
+  has_url: boolean;
   topic: string;
   has_token: boolean;
+  error?: string;
 };
 
 export type AppSettings = {
   live_actions: boolean;
   engine_paused: boolean;
-  restore_only_what_we_stopped: boolean;
   sample_retention_hours: number;
-  notify_url: string;
-  notify_kind: string;
-  ntfy_topic: string;
-  gotify_token: string;
+  run_retention_days: number;
+  ups_stale_alert_sec: number;
+  heartbeat_url_set: boolean;
+  heartbeat_url?: string;
   default_restore_hold_sec: number;
   default_shed_hold_sec: number;
   protect_critical: boolean;

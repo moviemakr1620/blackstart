@@ -34,6 +34,9 @@ const emptyHost = {
   username: "",
   password: "",
   private_key: "",
+  key_passphrase: "",
+  verify_tls: true,
+  ca_pem: "",
   access: "ssh",
   ha: false,
   mac: "",
@@ -110,6 +113,9 @@ export function Inventory() {
       username: "",
       password: "",
       private_key: "",
+      key_passphrase: "",
+      verify_tls: h.verify_tls,
+      ca_pem: String(h.extra?.ca_pem || ""),
       access: String(h.extra?.access || (h.kind === "docker" ? "ssh" : "api")),
       ha: Boolean(h.extra?.ha),
       mac: String(h.extra?.mac || ""),
@@ -150,9 +156,12 @@ export function Inventory() {
       if (hostForm.username) creds.username = hostForm.username;
       if (hostForm.password) creds.password = hostForm.password;
       if (hostForm.private_key) creds.private_key = hostForm.private_key;
+      if (hostForm.key_passphrase) creds.key_passphrase = hostForm.key_passphrase;
     }
     const existing = editingHostId ? hosts.find((h) => h.id === editingHostId) : undefined;
     const extra: Record<string, unknown> = { ...(existing?.extra || {}) };
+    if (hostForm.ca_pem.trim()) extra.ca_pem = hostForm.ca_pem.trim();
+    else delete extra.ca_pem;
     if (hostForm.kind === "docker") {
       extra.access = hostForm.access;
       if (hostForm.address.startsWith("unix")) extra.socket = hostForm.address;
@@ -173,7 +182,7 @@ export function Inventory() {
       enabled: true,
       address: hostForm.address,
       port: Number(hostForm.port),
-      verify_tls: false,
+      verify_tls: hostForm.verify_tls,
       credentials: creds,
       extra,
     };
@@ -566,10 +575,44 @@ export function Inventory() {
               <label>Password</label>
               <input className="w-full" type="password" value={hostForm.password} onChange={(e) => setHostForm({ ...hostForm, password: e.target.value })} />
             </div>
-            {hostForm.kind === "ssh" && (
+            {["ssh", "k3s", "docker", "omv"].includes(hostForm.kind) && (
+              <>
+                <div className="md:col-span-2 space-y-1">
+                  <label>SSH private key (optional){editingHostId ? " — blank keeps current" : ""}</label>
+                  <textarea className="w-full" rows={3} value={hostForm.private_key} onChange={(e) => setHostForm({ ...hostForm, private_key: e.target.value })} />
+                </div>
+                <div className="space-y-1">
+                  <label>Key passphrase (if the key has one)</label>
+                  <input className="w-full" type="password" value={hostForm.key_passphrase} onChange={(e) => setHostForm({ ...hostForm, key_passphrase: e.target.value })} />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {["proxmox", "pbs", "synology", "omv"].includes(hostForm.kind) && (
+          <div className="grid md:grid-cols-2 gap-3">
+            <label className="flex items-center gap-2 text-sm normal-case tracking-normal">
+              <input
+                type="checkbox"
+                checked={hostForm.verify_tls}
+                onChange={(e) => setHostForm({ ...hostForm, verify_tls: e.target.checked })}
+              />
+              Verify the HTTPS certificate
+            </label>
+            <p className="text-[11px] text-slate-500">
+              Self-signed certificate? Paste it (or your lab CA) below instead of turning this off. Turning it off lets
+              anyone on the network pretend to be this host and capture its credentials.
+            </p>
+            {hostForm.verify_tls && (
               <div className="md:col-span-2 space-y-1">
-                <label>Private key (optional)</label>
-                <textarea className="w-full" rows={3} value={hostForm.private_key} onChange={(e) => setHostForm({ ...hostForm, private_key: e.target.value })} />
+                <label>Trusted certificate (PEM, optional)</label>
+                <textarea
+                  className="w-full mono text-xs"
+                  rows={3}
+                  placeholder="-----BEGIN CERTIFICATE-----"
+                  value={hostForm.ca_pem}
+                  onChange={(e) => setHostForm({ ...hostForm, ca_pem: e.target.value })}
+                />
               </div>
             )}
           </div>
@@ -597,6 +640,29 @@ export function Inventory() {
               </span>
             </div>
             {h.last_error && <div className="text-xs text-rose break-all">{h.last_error}</div>}
+            {h.credentials_error && <div className="text-xs text-rose">{h.credentials_error}</div>}
+            {!h.verify_tls && ["proxmox", "pbs", "synology", "omv"].includes(h.kind) && (
+              <div className="text-[11px] text-amber">HTTPS certificate not verified — edit to turn it on.</div>
+            )}
+            {typeof h.extra?.ssh_host_key === "string" && (
+              <div className="text-[11px] text-slate-500 mono break-all">
+                SSH key pinned: {String(h.extra.ssh_host_key)}{" "}
+                <button
+                  className="underline"
+                  onClick={async () => {
+                    try {
+                      await api.post(`/api/hosts/${h.id}/forget-host-key`);
+                      await load();
+                      setMsg(`Forgot the SSH key for ${h.name}. Test it again to pin the new one.`);
+                    } catch (e) {
+                      setErr(e instanceof Error ? e.message : "Could not forget the key");
+                    }
+                  }}
+                >
+                  forget
+                </button>
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               <button className="btn-ghost" onClick={() => editHost(h)}>
                 Edit

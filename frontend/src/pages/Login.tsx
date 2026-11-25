@@ -6,7 +6,7 @@ import { api, setToken } from "../api";
 export function Login() {
   const nav = useNavigate();
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("blackstart");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -15,9 +15,12 @@ export function Login() {
     setBusy(true);
     setError("");
     try {
-      const res = await api.post<{ token: string }>("/api/auth/login", { username, password });
+      const res = await api.post<{ token: string; must_change_password?: boolean }>("/api/auth/login", {
+        username,
+        password,
+      });
       setToken(res.token);
-      nav("/");
+      nav(res.must_change_password ? "/change-password" : "/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -55,8 +58,8 @@ export function Login() {
           {busy ? "Signing in…" : "Enter control room"}
         </button>
         <p className="text-[11px] text-slate-500">
-          Default is <span className="mono text-slate-300">admin / blackstart</span>. Change it in Settings after
-          first login.
+          First start? The admin password is in <span className="mono text-slate-300">initial-admin-password.txt</span>{" "}
+          in the data folder (or the password you set in the environment). You will choose a new one after signing in.
         </p>
       </form>
     </div>

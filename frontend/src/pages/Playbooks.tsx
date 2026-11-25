@@ -306,6 +306,7 @@ export function Playbooks() {
                   ? ` · ${upsSources.find((s) => s.id === p.ups_source_id)?.name || "UPS #" + p.ups_source_id}`
                   : ""}
               </div>
+              {p.enabled && p.binding_warning && <div className="text-[11px] text-amber">{p.binding_warning}</div>}
             </button>
           ))}
           <button className="btn-ghost w-full" onClick={createPolicy}>
@@ -467,9 +468,15 @@ export function Playbooks() {
                       <input
                         className="w-full"
                         type="number"
-                        value={step.trigger.hold_seconds ?? 0}
+                        value={step.trigger.hold_seconds ?? ""}
+                        placeholder={draft.kind === "shed" ? "default (Settings, 15s)" : "default (Settings, 120s)"}
                         onChange={(e) =>
-                          updateStep(idx, { trigger: { ...step.trigger, hold_seconds: Number(e.target.value) } })
+                          updateStep(idx, {
+                            trigger: {
+                              ...step.trigger,
+                              hold_seconds: e.target.value === "" ? undefined : Number(e.target.value),
+                            },
+                          })
                         }
                       />
                       <p className="text-[11px] text-slate-500">

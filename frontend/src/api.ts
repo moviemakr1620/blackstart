@@ -21,6 +21,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       window.location.href = "/login";
     }
   }
+  if (resp.status === 403 && window.location.pathname !== "/change-password") {
+    const text = await resp.clone().text();
+    if (text.includes("password_change_required")) {
+      window.location.href = "/change-password";
+    }
+  }
   if (!resp.ok) {
     let detail = resp.statusText;
     try {
@@ -45,6 +51,19 @@ export const api = {
 
 export function wsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const token = getToken() || "";
-  return `${proto}://${window.location.host}/api/ws?token=${encodeURIComponent(token)}`;
+  return `${proto}://${window.location.host}/api/ws`;
+}
+
+/** Open the live-updates socket. The token goes in the first message, not the URL. */
+export function openLiveSocket(onMessage: (data: any) => void): WebSocket {
+  const ws = new WebSocket(wsUrl());
+  ws.onopen = () => ws.send(JSON.stringify({ token: getToken() || "" }));
+  ws.onmessage = (msg) => {
+    try {
+      onMessage(JSON.parse(msg.data));
+    } catch {
+      /* ignore */
+    }
+  };
+  return ws;
 }
