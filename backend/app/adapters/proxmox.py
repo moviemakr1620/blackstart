@@ -5,6 +5,8 @@ from urllib.parse import quote
 
 import httpx
 
+from app.tlsutil import explain_tls_error, is_tls_error
+
 
 def split_api_token(token_id: str, token_secret: str) -> tuple[str, str]:
     """Accept id + secret, or a pasted `user@pam!name=uuid` / `user@pam!name:uuid` blob."""
@@ -63,18 +65,23 @@ class ProxmoxAdapter:
             kwargs["data"] = data
         if params:
             kwargs["params"] = params
-        async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
-            resp = await client.request(method, url, **kwargs)
-            if resp.status_code >= 400:
-                detail = (resp.text or "")[:400]
-                raise RuntimeError(f"PVE {resp.status_code} {path}: {detail or resp.reason_phrase}")
-            if not resp.content:
-                return {}
-            body = resp.json()
-            if isinstance(body, dict) and "data" in body:
-                payload = body["data"]
-                return [] if payload is None else payload
-            return body
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
+                resp = await client.request(method, url, **kwargs)
+        except Exception as exc:
+            if is_tls_error(exc):
+                raise RuntimeError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
+            raise
+        if resp.status_code >= 400:
+            detail = (resp.text or "")[:400]
+            raise RuntimeError(f"PVE {resp.status_code} {path}: {detail or resp.reason_phrase}")
+        if not resp.content:
+            return {}
+        body = resp.json()
+        if isinstance(body, dict) and "data" in body:
+            payload = body["data"]
+            return [] if payload is None else payload
+        return body
 
     async def version(self) -> Any:
         return await self._request("GET", "/api2/json/version")

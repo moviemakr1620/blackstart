@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from app.tlsutil import explain_tls_error, is_tls_error
+
 from app.adapters.proxmox import split_api_token
 
 
@@ -38,15 +40,20 @@ class PbsAdapter:
 
     async def _request(self, method: str, path: str, data: dict | None = None) -> Any:
         url = f"{self.base}{path}"
-        async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
-            resp = await client.request(method, url, headers=self._headers(), data=data)
-            if resp.status_code >= 400:
-                detail = (resp.text or "")[:400]
-                raise RuntimeError(f"PBS {resp.status_code} {path}: {detail or resp.reason_phrase}")
-            if not resp.content:
-                return {}
-            body = resp.json()
-            return body.get("data", body)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
+                resp = await client.request(method, url, headers=self._headers(), data=data)
+        except Exception as exc:
+            if is_tls_error(exc):
+                raise RuntimeError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
+            raise
+        if resp.status_code >= 400:
+            detail = (resp.text or "")[:400]
+            raise RuntimeError(f"PBS {resp.status_code} {path}: {detail or resp.reason_phrase}")
+        if not resp.content:
+            return {}
+        body = resp.json()
+        return body.get("data", body)
 
     async def version(self) -> Any:
         return await self._request("GET", "/api2/json/version")

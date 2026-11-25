@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,7 +21,7 @@ from app.engine.executor import (
     uses_ssh_docker,
 )
 from app.models import Host, Target, utcnow
-from app.schemas import HostIn, HostOut, TargetOut
+from app.schemas import HostIn, HostOut, HostTestIn, TargetOut
 from app.redact import redact
 from app.security import SecretDecryptError, decrypt_json, encrypt_json, get_current_user
 from app.secrets_update import HOST_CREDENTIAL_FIELDS, extra_without, merge_secrets
@@ -105,15 +105,59 @@ async def delete_host(
     return {"ok": True}
 
 
+
+def _restore_unsaved_tls(row: Host, saved_verify: bool, saved_extra: str | None) -> None:
+    """Drop unsaved verify/ca_pem overrides, but keep other extra written during Test (HA, host key)."""
+    row.verify_tls = saved_verify
+    try:
+        current = json.loads(row.extra_json or "{}")
+        if not isinstance(current, dict):
+            current = {}
+    except json.JSONDecodeError:
+        current = {}
+    try:
+        saved = json.loads(saved_extra or "{}")
+        if not isinstance(saved, dict):
+            saved = {}
+    except json.JSONDecodeError:
+        saved = {}
+    if "ca_pem" in saved:
+        current["ca_pem"] = saved["ca_pem"]
+    else:
+        current.pop("ca_pem", None)
+    row.extra_json = json.dumps(current)
+
+
 @router.post("/{host_id}/test")
 async def test_host(
     host_id: int,
+    body: HostTestIn | None = Body(default=None),
     _: str = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    """Test uses the saved host. Optional body (verify_tls, ca_pem) overrides for this call only
+    — blank ca_pem keeps the stored certificate (same as the form).
+    """
+    from app.tlsutil import explain_tls_error, is_tls_error
+
     row = await session.get(Host, host_id)
     if not row:
         raise HTTPException(404, "Host not found")
+    saved_verify, saved_extra = row.verify_tls, row.extra_json
+    if body is not None:
+        if body.verify_tls is not None:
+            row.verify_tls = body.verify_tls
+        extra = json.loads(row.extra_json or "{}")
+        if not isinstance(extra, dict):
+            extra = {}
+        if "ca_pem" in (body.clear_fields or []):
+            extra.pop("ca_pem", None)
+            row.extra_json = json.dumps(extra)
+        else:
+            pem = (body.ca_pem or "").strip()
+            if pem:
+                extra["ca_pem"] = pem
+                row.extra_json = json.dumps(extra)
     try:
         info: dict
         if row.kind == "proxmox":
@@ -160,12 +204,19 @@ async def test_host(
             row.last_error = " | ".join(str(w) for w in info["warnings"][:6])
         else:
             row.last_error = ""
+        _restore_unsaved_tls(row, saved_verify, saved_extra)
         await session.commit()
         return {"ok": True, "info": info}
     except HTTPException:
+        _restore_unsaved_tls(row, saved_verify, saved_extra)
         raise
     except Exception as exc:  # noqa: BLE001
-        row.last_error = redact(str(exc))
+        message = str(exc)
+        if is_tls_error(exc):
+            from app.engine.executor import tls_verify
+            message = explain_tls_error(exc, address=row.address, verify=tls_verify(row))
+        _restore_unsaved_tls(row, saved_verify, saved_extra)
+        row.last_error = redact(message)
         await session.commit()
         raise HTTPException(400, row.last_error) from exc
 

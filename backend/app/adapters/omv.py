@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from app.tlsutil import explain_tls_error, is_tls_error
+
 from app.adapters.ssh import SshAdapter
 
 
@@ -39,10 +41,15 @@ class OmvAdapter:
         if sid:
             headers["Cookie"] = f"X-OPENMEDIAVAULT-SESSIONID={sid}"
         payload = {"service": service, "method": method, "params": params}
-        async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
-            resp = await client.post(f"{self.base}/rpc.php", json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
+                resp = await client.post(f"{self.base}/rpc.php", json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            if is_tls_error(exc):
+                raise RuntimeError(explain_tls_error(exc, address=self.base, verify=self.verify)) from exc
+            raise
         if isinstance(data, dict) and data.get("error"):
             raise RuntimeError(str(data.get("error")))
         return data.get("response", data)

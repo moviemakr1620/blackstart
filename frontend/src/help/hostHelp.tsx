@@ -53,7 +53,8 @@ export const HELP_TLS = {
       </p>
       <p>
         Home-lab Proxmox, PBS, Synology, and OMV usually use a self-signed certificate. Leave verification on and paste
-        that certificate (or your lab CA) in the box — turning verification off is quicker but less safe.
+        the lab CA <em>or</em> the server certificate itself — either one works. If you connect by IP, Blackstart still
+        checks the signature and does not require the name on the certificate to match the IP.
       </p>
       <p className="font-medium text-slate-200">How to get the certificate</p>
       <ul className="list-disc pl-4 space-y-1">

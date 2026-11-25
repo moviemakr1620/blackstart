@@ -276,13 +276,13 @@ export function Inventory() {
     }
   }
 
-  async function testHost(id: number) {
+  async function testHost(id: number, overrides?: { verify_tls?: boolean; ca_pem?: string; clear_fields?: string[] }) {
     setErr("");
     try {
       const res = await api.post<{
         ok: boolean;
         info?: { vms?: number; lxcs?: number; nodes?: string[]; warnings?: string[]; version?: unknown; node?: string };
-      }>(`/api/hosts/${id}/test`);
+      }>(`/api/hosts/${id}/test`, overrides ?? {});
       const info = res.info || {};
       if (typeof info.vms === "number" || typeof info.lxcs === "number") {
         const warn = info.warnings?.length ? ` Warning: ${info.warnings[0]}` : "";
@@ -750,10 +750,24 @@ export function Inventory() {
             </button>
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button className="btn-primary" onClick={saveHost}>
             {editingHostId ? "Save host changes" : "Save host"}
           </button>
+          {editingHostId && (
+            <button
+              className="btn-ghost"
+              onClick={() =>
+                testHost(editingHostId, {
+                  verify_tls: hostForm.verify_tls,
+                  ca_pem: isCleared("ca_pem") ? "" : hostForm.ca_pem,
+                  clear_fields: isCleared("ca_pem") ? ["ca_pem"] : [],
+                })
+              }
+            >
+              Test with these settings
+            </button>
+          )}
         </div>
       </section>
       )}

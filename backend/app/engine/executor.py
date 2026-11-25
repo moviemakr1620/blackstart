@@ -32,24 +32,24 @@ def _creds(host: Host) -> dict[str, Any]:
         raise ActionError(f"Credentials for '{host.name}' can't be read: {exc}") from exc
 
 
-def tls_verify(host: Host) -> Any:
+def tls_verify(host: Host, *, ca_pem: str | None = None, verify_tls: bool | None = None) -> Any:
     """False, True, or an SSL context trusting the host's own CA / self-signed cert.
 
-    Paste the PEM of a self-signed certificate (or your lab CA) into the host's
-    "ca_pem" extra field to verify it instead of turning verification off.
+    A pasted PEM (lab CA or the server certificate itself) is the trust anchor.
+    Hostname checking is skipped when the address is an IP, because lab certs
+    are often issued only to a DNS name.
     """
-    if not host.verify_tls:
-        return False
-    pem = str(_extra(host).get("ca_pem") or "").strip()
-    if pem:
-        import ssl
+    from app.tlsutil import verify_setting
 
-        ctx = ssl.create_default_context(cadata=pem)
-        # Proxmox / DSM self-signed certs are often issued to a name, not the IP.
-        if _extra(host).get("ca_skip_hostname"):
-            ctx.check_hostname = False
-        return ctx
-    return True
+    extra = _extra(host)
+    pem = ca_pem if ca_pem is not None else str(extra.get("ca_pem") or "")
+    on = host.verify_tls if verify_tls is None else verify_tls
+    return verify_setting(
+        verify_tls=on,
+        ca_pem=pem,
+        address=host.address,
+        skip_hostname=bool(extra.get("ca_skip_hostname")),
+    )
 
 
 def _extra(obj: Host | Target) -> dict[str, Any]:
@@ -152,7 +152,10 @@ def docker_from(host: Host) -> DockerAdapter:
     if host.kind == "docker" and host.address and not host.address.startswith("unix") and "://" not in host.address:
         port = host.port or 2375
         address = f"http://{host.address}:{port}"
-    return DockerAdapter(address=address)
+    verify: Any = True
+    if str(address).startswith("https"):
+        verify = tls_verify(host)
+    return DockerAdapter(address=address, verify=verify)
 
 
 def _sh_quote(value: str) -> str:

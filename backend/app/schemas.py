@@ -90,6 +90,13 @@ class HostIn(BaseModel):
     clear_fields: list[str] = Field(default_factory=list)
 
 
+class HostTestIn(BaseModel):
+    """Optional unsaved overrides for POST /api/hosts/{id}/test. Blank ca_pem keeps the stored cert."""
+    verify_tls: bool | None = None
+    ca_pem: str | None = None
+    clear_fields: list[str] = Field(default_factory=list)
+
+
 class HostOut(BaseModel):
     id: int
     name: str

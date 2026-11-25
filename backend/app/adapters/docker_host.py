@@ -22,9 +22,11 @@ class DockerAdapter:
         self,
         address: str = "unix:///var/run/docker.sock",
         timeout: float = 20.0,
+        verify: Any = True,
     ) -> None:
         self.address = address
         self.timeout = timeout
+        self.verify = verify
 
     def _client(self) -> httpx.AsyncClient:
         if self.address.startswith("unix://"):
@@ -36,7 +38,7 @@ class DockerAdapter:
                 timeout=self.timeout,
             )
         base = self.address if self.address.startswith("http") else f"http://{self.address}"
-        return httpx.AsyncClient(base_url=base, timeout=self.timeout)
+        return httpx.AsyncClient(base_url=base, timeout=self.timeout, verify=self.verify)
 
     async def _request(self, method: str, path: str, timeout: float | None = None, **kwargs: Any) -> Any:
         async with self._client() as client:
