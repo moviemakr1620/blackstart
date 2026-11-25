@@ -8,3 +8,5 @@ backend/static
 .git
 *.db
 .env
+
+.github

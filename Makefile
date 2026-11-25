@@ -19,4 +19,4 @@ ui:
 	cp -R frontend/dist/. backend/static/
 
 build:
-	docker compose build
+	docker build -t ghcr.io/moviemakr1620/blackstart:latest .

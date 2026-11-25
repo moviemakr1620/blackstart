@@ -1,12 +1,17 @@
 FROM node:22-alpine AS ui
 WORKDIR /ui
-COPY frontend/package.json ./
-RUN npm install
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 COPY frontend ./
 RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
+LABEL org.opencontainers.image.source="https://github.com/moviemakr1620/blackstart" \
+      org.opencontainers.image.url="https://github.com/moviemakr1620/blackstart" \
+      org.opencontainers.image.title="Blackstart" \
+      org.opencontainers.image.description="UPS-driven shutdown and restore controller for Proxmox, Synology, and Docker." \
+      org.opencontainers.image.licenses="MIT"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     BLACKSTART_DATA_DIR=/data \

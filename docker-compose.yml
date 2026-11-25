@@ -1,14 +1,20 @@
+# Pull the published image (Portainer / Dockhand). To build from this folder
+# instead, uncomment `build: .` below.
 services:
   blackstart:
-    build: .
+    image: ghcr.io/moviemakr1620/blackstart:latest
+    # build: .
     container_name: blackstart
     restart: unless-stopped
     ports:
       - "8088:8088"
     environment:
-      BLACKSTART_SECRET_KEY: ${BLACKSTART_SECRET_KEY:-change-me-to-a-long-random-string}
+      # Required. `docker compose` refuses to start if these are unset or empty.
+      # Portainer: set them under the stack's Environment variables, or paste the
+      # stack from deploy/docker.md and replace the placeholders there.
+      BLACKSTART_SECRET_KEY: ${BLACKSTART_SECRET_KEY:?Set BLACKSTART_SECRET_KEY to a long random string}
       BLACKSTART_ADMIN_USER: ${BLACKSTART_ADMIN_USER:-admin}
-      BLACKSTART_ADMIN_PASSWORD: ${BLACKSTART_ADMIN_PASSWORD:-blackstart}
+      BLACKSTART_ADMIN_PASSWORD: ${BLACKSTART_ADMIN_PASSWORD:?Set BLACKSTART_ADMIN_PASSWORD to a strong password}
       BLACKSTART_DATA_DIR: /data
       BLACKSTART_PEANUT_URL: ${BLACKSTART_PEANUT_URL:-}
       BLACKSTART_NUT_HOST: ${BLACKSTART_NUT_HOST:-}

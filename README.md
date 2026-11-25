@@ -77,7 +77,7 @@ Pick one place that **stays up during a shed** (same UPS as PeaNUT). Mark it cri
 | Path | Guide |
 | --- | --- |
 | **Proxmox LXC** | [deploy/lxc.md](deploy/lxc.md) — Debian 12 CT, Python only, UI already built |
-| **Docker Compose** | [deploy/docker.md](deploy/docker.md) — `docker compose up -d --build` |
+| **Docker Compose / Portainer** | [deploy/docker.md](deploy/docker.md) — pull `ghcr.io/moviemakr1620/blackstart:latest` |
 | **docker run** | [deploy/docker.md](deploy/docker.md#docker-run) |
 | **PeaNUT / NUT** | [deploy/peanut.md](deploy/peanut.md) — USB UPS, helper-script LXC, or Docker |
 
@@ -94,29 +94,34 @@ bash deploy/install-lxc.sh
 
 Open `http://<lxc-ip>:8088`. Full walkthrough (UI create, `create-lxc.sh`, updates): **[deploy/lxc.md](deploy/lxc.md)**.
 
-### Docker Compose (short)
+### Docker Compose / Portainer (short)
+
+Paste the stack in [deploy/docker.md](deploy/docker.md#portainer--dockhand-pull-the-image) into Portainer or Dockhand, replace the `REPLACE_ME_…` placeholders, and deploy. No clone or build on the NAS.
+
+From this repo with Compose:
 
 ```bash
 git clone https://github.com/moviemakr1620/blackstart.git
 cd blackstart
-cp .env.example .env          # set BLACKSTART_SECRET_KEY
-docker compose up -d --build
+cp .env.example .env          # set BLACKSTART_SECRET_KEY and BLACKSTART_ADMIN_PASSWORD
+docker compose pull
+docker compose up -d
 # http://<host>:8088
 ```
+
+Compose will refuse to start if the secret key or admin password is missing.
 
 Need Wake-on-LAN from the container? Use `network_mode: host` on Linux — see [deploy/docker.md](deploy/docker.md).
 
 ### docker run (short)
 
 ```bash
-git clone https://github.com/moviemakr1620/blackstart.git
-cd blackstart
-docker build -t blackstart .
 docker run -d --name blackstart --restart unless-stopped \
   -p 8088:8088 \
   -e BLACKSTART_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e BLACKSTART_ADMIN_PASSWORD='pick-a-strong-password' \
   -v blackstart-data:/data \
-  blackstart
+  ghcr.io/moviemakr1620/blackstart:latest
 ```
 
 ---
@@ -201,7 +206,7 @@ The LXC serves `backend/static/` (already built). After a source-only commit you
 **Docker**
 
 ```bash
-cd blackstart && git pull && docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
 
 ---
