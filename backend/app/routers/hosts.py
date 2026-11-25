@@ -24,6 +24,7 @@ from app.models import Host, Target, utcnow
 from app.schemas import HostIn, HostOut, TargetOut
 from app.redact import redact
 from app.security import SecretDecryptError, decrypt_json, encrypt_json, get_current_user
+from app.secrets_update import HOST_CREDENTIAL_FIELDS, extra_without, merge_secrets
 from app.serialize import host_out, target_out
 
 router = APIRouter(prefix="/api/hosts", tags=["hosts"])
@@ -76,14 +77,15 @@ async def update_host(
     row.address = body.address
     row.port = body.port
     row.verify_tls = body.verify_tls
-    row.extra_json = json.dumps(body.extra or {})
-    if body.credentials:
+    row.extra_json = json.dumps(extra_without(body.extra, body.clear_fields))
+    if body.credentials or body.clear_fields:
         try:
             existing = decrypt_json(row.credentials_enc)
         except SecretDecryptError:
             existing = {}  # unreadable old value: replace it with what was entered
-        existing.update({k: v for k, v in body.credentials.items() if v not in (None, "")})
-        row.credentials_enc = encrypt_json(existing)
+        row.credentials_enc = encrypt_json(
+            merge_secrets(existing, body.credentials, body.clear_fields, HOST_CREDENTIAL_FIELDS)
+        )
     await session.commit()
     await session.refresh(row)
     return host_out(row)

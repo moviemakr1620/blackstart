@@ -25,6 +25,7 @@ class ChannelIn(BaseModel):
     url: str = ""
     topic: str = ""
     token: str | None = None
+    clear_fields: list[str] = Field(default_factory=list)
 
 
 class ChannelOut(BaseModel):
@@ -131,12 +132,17 @@ async def update_channel(
     row.kind = body.kind
     row.enabled = body.enabled
     url = body.url.strip()
-    if url:
+    if "url" in (body.clear_fields or []) and not url:
+        row.url_enc = ""
+        row.url = ""
+    elif url:
         _check(url)
         row.url_enc = encrypt_secret(url)
         row.url = ""
     row.topic = body.topic
-    if body.token:
+    if "token" in (body.clear_fields or []) and not body.token:
+        row.token_enc = ""
+    elif body.token:
         row.token_enc = encrypt_secret(body.token)
     await session.commit()
     await session.refresh(row)

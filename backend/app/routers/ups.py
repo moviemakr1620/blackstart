@@ -125,7 +125,9 @@ async def update_source(
     row.base_url = body.base_url
     row.device_name = body.device_name
     row.username = body.username
-    if body.password:
+    if "password" in (body.clear_fields or []):
+        row.password_enc = ""
+    elif body.password:
         row.password_enc = encrypt_secret(body.password)
     row.poll_interval_sec = body.poll_interval_sec
     row.extra_json = json.dumps(body.extra or {})

@@ -34,6 +34,7 @@ class UpsSourceIn(BaseModel):
     password: str | None = None
     poll_interval_sec: int = 5
     extra: dict[str, Any] = Field(default_factory=dict)
+    clear_fields: list[str] = Field(default_factory=list)
 
 
 class UpsSourceOut(BaseModel):
@@ -84,6 +85,9 @@ class HostIn(BaseModel):
     verify_tls: bool = True
     credentials: dict[str, Any] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Names of stored secrets to delete (password, private_key, …). Blank
+    # credential fields still mean "keep the current value".
+    clear_fields: list[str] = Field(default_factory=list)
 
 
 class HostOut(BaseModel):
@@ -226,8 +230,9 @@ class AppSettingsIn(BaseModel):
     primary_ups_id: int | None = None
     timezone: str | None = None
     ups_stale_alert_sec: int | None = Field(default=None, ge=10, le=3600)
-    # "" clears it; omit to keep the stored one.
+    # "" clears it; omit to keep the stored one. clear_fields may include "heartbeat_url".
     heartbeat_url: str | None = None
+    clear_fields: list[str] = Field(default_factory=list)
 
 
 class SimulateIn(BaseModel):

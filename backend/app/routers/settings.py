@@ -36,7 +36,10 @@ async def update_settings(
     session: AsyncSession = Depends(get_session),
 ) -> AppSettingsOut:
     incoming = body.model_dump(exclude_unset=True)
+    clear = set(incoming.pop("clear_fields", None) or [])
     hb = incoming.pop("heartbeat_url", None)
+    if "heartbeat_url" in clear and hb in (None, ""):
+        hb = ""
     if hb is not None:
         hb = hb.strip()
         if hb:
