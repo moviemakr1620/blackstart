@@ -11,6 +11,7 @@ import { useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api, setToken } from "./api";
 import { setAppTimezone } from "./time";
+import { VersionFooter } from "./components/VersionFooter";
 import type { AppSettings } from "./types";
 
 const links = [
@@ -72,6 +73,7 @@ export function Layout() {
           >
             Sign out
           </button>
+          <VersionFooter />
         </div>
       </aside>
       <main className="min-w-0">

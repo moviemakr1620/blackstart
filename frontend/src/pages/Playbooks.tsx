@@ -7,6 +7,64 @@ import { ACTIONS, actionLabel, actionMeta, CATEGORIES, categoryOf, TRIGGERS, tri
 import { matchingInventory, TargetField } from "../targetPick";
 import type { Host, NotifyChannel, Policy, PolicyStep, Target, UpsSource } from "../types";
 
+
+function NameListField({
+  values,
+  onChange,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (values: string[]) => void;
+  placeholder: string;
+}) {
+  const [draft, setDraft] = useState("");
+  function add(raw: string) {
+    const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+    if (!parts.length) return;
+    const seen = new Set(values.map((v) => v.toLowerCase()));
+    const next = [...values];
+    for (const p of parts) {
+      if (!seen.has(p.toLowerCase())) {
+        seen.add(p.toLowerCase());
+        next.push(p);
+      }
+    }
+    onChange(next);
+    setDraft("");
+  }
+  return (
+    <div>
+      {values.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {values.map((name) => (
+            <span key={name} className="inline-flex items-center gap-1 rounded-full bg-mint/10 text-mint border border-mint/25 px-2 py-0.5 text-xs">
+              {name}
+              <button type="button" onClick={() => onChange(values.filter((v) => v !== name))}>
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        className="w-full"
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            add(draft);
+          } else if (e.key === "Backspace" && !draft && values.length) {
+            onChange(values.slice(0, -1));
+          }
+        }}
+        onBlur={() => add(draft)}
+      />
+    </div>
+  );
+}
+
 function triggerSelectValue(step: PolicyStep) {
   if (step.trigger.all) return "online_and_battery";
   return step.trigger.type || "on_battery";
@@ -233,8 +291,8 @@ export function Playbooks() {
           <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">What happens, and when</div>
           <h1 className="text-2xl font-semibold">Playbooks</h1>
           <p className="text-sm text-slate-500 mt-1 max-w-2xl">
-            Each UPS can have one active shed playbook and one active restore playbook. Pick the UPS on the playbook
-            itself. <strong className="text-slate-300">Dry run</strong> logs what would happen.{" "}
+            Pick the UPS this playbook applies to. A step can target several containers, stacks, or guests at once.
+            <strong className="text-slate-300"> Dry run</strong> logs what would happen.{" "}
             <strong className="text-slate-300">Run live</strong> actually calls hosts if live actions are on.
           </p>
         </div>
@@ -516,7 +574,7 @@ export function Playbooks() {
                       {actionHelp && <p className="text-[11px] text-slate-500">{actionHelp}</p>}
                     </div>
                     <div className="space-y-1 md:col-span-2">
-                      <label>Target</label>
+                      <label>Target(s)</label>
                       {actionMeta(step.action.type)?.target === "none" && (
                         <div className="text-sm text-slate-500 py-2">No target needed</div>
                       )}
@@ -588,28 +646,28 @@ export function Playbooks() {
                     <div className="grid md:grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label>
-                          {step.action.type?.includes("stack") ? "Compose stack / project name" : "Container name"}
+                          {step.action.type?.includes("stack")
+                            ? "Compose stack names (comma or Enter)"
+                            : "Container names (comma or Enter)"}
                         </label>
-                        <input
-                          className="w-full"
-                          placeholder={step.action.type?.includes("stack") ? "media" : "plex"}
-                          value={
-                            (step.action.type?.includes("stack") ? step.action.stack : step.action.container) ||
-                            step.action.name ||
-                            ""
+                        <NameListField
+                          values={
+                            step.action.type?.includes("stack")
+                              ? step.action.stacks || (step.action.stack || step.action.name ? [String(step.action.stack || step.action.name)] : [])
+                              : step.action.containers || (step.action.container || step.action.name ? [String(step.action.container || step.action.name)] : [])
                           }
-                          onChange={(e) => {
-                            const v = e.target.value;
+                          placeholder={step.action.type?.includes("stack") ? "media, arr" : "plex, sonarr"}
+                          onChange={(names) => {
                             if (step.action.type?.includes("stack")) {
-                              updateStep(idx, { action: { ...step.action, stack: v, name: v } });
+                              updateStep(idx, { action: { ...step.action, stacks: names, stack: names[0], name: names[0] } });
                             } else {
-                              updateStep(idx, { action: { ...step.action, container: v, name: v } });
+                              updateStep(idx, { action: { ...step.action, containers: names, container: names[0], name: names[0] } });
                             }
                           }}
                         />
                         <p className="text-[11px] text-slate-500">
                           Inventory is empty for this action. Add a Docker (or Synology) host, click Discover / Refresh
-                          inventory, then pick from the Target dropdown.
+                          inventory, then pick from the Target dropdown. You can still type several names here.
                         </p>
                       </div>
                       <div className="space-y-1">

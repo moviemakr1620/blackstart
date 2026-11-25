@@ -1,6 +1,7 @@
 import { Zap } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { VersionFooter } from "../components/VersionFooter";
 import { api, setToken } from "../api";
 
 export function Login() {
@@ -29,7 +30,7 @@ export function Login() {
   }
 
   return (
-    <div className="min-h-screen grid place-items-center px-4">
+    <div className="relative min-h-screen grid place-items-center px-4">
       <form onSubmit={onSubmit} className="card w-full max-w-md p-8 space-y-5 shadow-glow">
         <div className="flex items-center gap-3">
           <div className="h-11 w-11 rounded-2xl bg-mint/15 text-mint grid place-items-center">
@@ -62,6 +63,7 @@ export function Login() {
           in the data folder (or the password you set in the environment). You will choose a new one after signing in.
         </p>
       </form>
+      <VersionFooter className="absolute left-4 bottom-4" />
     </div>
   );
 }

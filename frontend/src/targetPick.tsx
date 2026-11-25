@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { MultiSelect, type MultiSelectOption } from "./components/MultiSelect";
 import { actionMeta } from "./labels";
 import type { Action, Host, Target } from "./types";
 
@@ -83,23 +84,25 @@ function hostOptionLabel(h: Host, actionType: string): string {
   return `${h.name} (${h.kind})`;
 }
 
-function containerGroups(list: Target[]): { stack: string; items: Target[] }[] {
-  const map = new Map<string, Target[]>();
-  for (const t of list) {
-    const stack = stackOf(t) || "Not in a stack";
-    const bucket = map.get(stack);
-    if (bucket) bucket.push(t);
-    else map.set(stack, [t]);
+const DOCKER_ACTIONS = new Set(["docker_stop", "docker_start", "docker_stop_stack", "docker_start_stack"]);
+
+function selectedTargetIds(action: Action): number[] {
+  if (Array.isArray(action.target_ids) && action.target_ids.length) {
+    return action.target_ids.filter((n) => Number.isFinite(n));
   }
-  const keys = [...map.keys()].sort((a, b) => {
-    if (a === "Not in a stack") return 1;
-    if (b === "Not in a stack") return -1;
-    return alpha(a, b);
-  });
-  return keys.map((stack) => ({ stack, items: byName(map.get(stack) || []) }));
+  return action.target_id ? [action.target_id] : [];
 }
 
-const DOCKER_ACTIONS = new Set(["docker_stop", "docker_start", "docker_stop_stack", "docker_start_stack"]);
+function selectedHostIds(action: Action): number[] {
+  if (Array.isArray(action.host_ids) && action.host_ids.length) {
+    return action.host_ids.filter((n) => Number.isFinite(n));
+  }
+  return action.host_id ? [action.host_id] : [];
+}
+
+function stackLabel(t: Target): string {
+  return t.external_id || t.name.replace(/^stack:/, "");
+}
 
 export function TargetField({
   actionType,
@@ -118,17 +121,14 @@ export function TargetField({
   const isDocker = DOCKER_ACTIONS.has(actionType);
   const isContainer = actionMeta(actionType)?.target === "container";
   const isStack = actionMeta(actionType)?.target === "stack";
+  const pickedIds = selectedTargetIds(action);
+  const selectedTargets = pickedIds.map((id) => targets.find((t) => t.id === id)).filter((t): t is Target => Boolean(t));
 
-  const selectedTarget = targets.find((t) => t.id === action.target_id) || null;
-  const inferredHostId = action.host_id ?? selectedTarget?.host_id ?? null;
+  const inferredHostId = action.host_id ?? selectedTargets[0]?.host_id ?? null;
 
   const dockerHosts = useMemo(() => {
     const ids = new Set(match.targets.map((t) => t.host_id).filter((id): id is number => Boolean(id)));
-    return byName(
-      hosts.filter(
-        (h) => h.kind === "docker" || h.kind === "ssh" || h.kind === "omv" || ids.has(h.id),
-      ),
-    );
+    return byName(hosts.filter((h) => h.kind === "docker" || h.kind === "ssh" || h.kind === "omv" || ids.has(h.id)));
   }, [hosts, match.targets]);
 
   const uniqueHostIds = useMemo(() => {
@@ -137,14 +137,44 @@ export function TargetField({
   }, [match.targets]);
 
   const showHostFirst = isDocker || uniqueHostIds.size > 1;
-  const hostChoices = isDocker
-    ? dockerHosts
-    : byName(hosts.filter((h) => uniqueHostIds.has(h.id)));
+  const hostChoices = isDocker ? dockerHosts : byName(hosts.filter((h) => uniqueHostIds.has(h.id)));
 
   const [stackFilter, setStackFilter] = useState("__all__");
   useEffect(() => {
     setStackFilter("__all__");
   }, [inferredHostId, actionType]);
+
+  function patchTargets(ids: number[]) {
+    const chosen = ids.map((id) => match.targets.find((t) => t.id === id)).filter((t): t is Target => Boolean(t));
+    const first = chosen[0];
+    const patch: Partial<Action> = {
+      target_ids: ids,
+      target_id: ids[0] ?? null,
+      host_id: first?.host_id ?? inferredHostId,
+    };
+    if (isContainer) {
+      const names = chosen.map((t) => t.external_id || t.name);
+      patch.containers = names;
+      patch.container = names[0];
+      patch.name = names[0];
+    }
+    if (isStack) {
+      const names = chosen.map((t) => stackLabel(t) || stackOf(t));
+      patch.stacks = names;
+      patch.stack = names[0];
+      patch.name = names[0];
+    }
+    onChange(patch);
+  }
+
+  function patchHosts(ids: number[]) {
+    onChange({
+      host_ids: ids,
+      host_id: ids[0] ?? null,
+      target_id: null,
+      target_ids: [],
+    });
+  }
 
   if (match.kind === "host") {
     const list =
@@ -156,24 +186,18 @@ export function TargetField({
             return alpha(a.name, b.name);
           })
         : byName(match.hosts);
+    const options: MultiSelectOption[] = list.map((h) => ({
+      value: String(h.id),
+      label: hostOptionLabel(h, actionType),
+    }));
     return (
-      <select
-        className="w-full"
-        value={action.host_id ?? ""}
-        onChange={(e) =>
-          onChange({
-            host_id: e.target.value ? Number(e.target.value) : null,
-            target_id: null,
-          })
-        }
-      >
-        <option value="">— pick a host —</option>
-        {list.map((h) => (
-          <option key={h.id} value={h.id}>
-            {hostOptionLabel(h, actionType)}
-          </option>
-        ))}
-      </select>
+      <MultiSelect
+        options={options}
+        values={selectedHostIds(action).map(String)}
+        onChange={(vals) => patchHosts(vals.map(Number))}
+        placeholder="— pick one or more hosts —"
+        searchPlaceholder="Search hosts…"
+      />
     );
   }
 
@@ -191,65 +215,46 @@ export function TargetField({
       ? hostFiltered.filter((t) => (stackFilter === "__none__" ? !stackOf(t) : stackOf(t) === stackFilter))
       : hostFiltered;
 
-  const targetSelect = isContainer ? (
-    <select
-      className="w-full"
-      value={action.target_id ?? ""}
+  const targetOptions: MultiSelectOption[] = (isStack ? byName(afterStack) : afterStack).map((t) => ({
+    value: String(t.id),
+    label:
+      (isStack ? stackLabel(t) : t.name) + (!showHostFirst && t.host_name ? ` · ${t.host_name}` : ""),
+    group: isContainer ? stackOf(t) || "Not in a stack" : undefined,
+  }));
+
+  // Keep a selected item visible even if the stack filter would hide it.
+  const optionIds = new Set(targetOptions.map((o) => o.value));
+  for (const t of selectedTargets) {
+    if (!optionIds.has(String(t.id))) {
+      targetOptions.unshift({
+        value: String(t.id),
+        label: isStack ? stackLabel(t) : t.name,
+        group: isContainer ? stackOf(t) || "Not in a stack" : undefined,
+      });
+    }
+  }
+
+  const picker = (
+    <MultiSelect
+      options={targetOptions}
+      values={pickedIds.map(String)}
       disabled={showHostFirst && !inferredHostId}
-      onChange={(e) => {
-        const id = e.target.value ? Number(e.target.value) : null;
-        const t = match.targets.find((x) => x.id === id);
-        onChange({
-          target_id: id,
-          host_id: t?.host_id ?? inferredHostId,
-          container: t?.external_id || t?.name || action.container,
-        });
-      }}
-    >
-      <option value="">{inferredHostId || !showHostFirst ? "— pick a container —" : "— pick a host first —"}</option>
-      {containerGroups(afterStack.filter((t) => t.kind === "container")).map((g) => (
-        <optgroup key={g.stack} label={g.stack}>
-          {g.items.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
-  ) : (
-    <select
-      className="w-full"
-      value={action.target_id ?? ""}
-      disabled={showHostFirst && !inferredHostId}
-      onChange={(e) => {
-        const id = e.target.value ? Number(e.target.value) : null;
-        const t = match.targets.find((x) => x.id === id);
-        onChange({
-          target_id: id,
-          host_id: t?.host_id ?? inferredHostId,
-          stack: isStack ? t?.external_id || (t ? stackOf(t) : "") || action.stack : action.stack,
-        });
-      }}
-    >
-      <option value="">
-        {inferredHostId || !showHostFirst
+      onChange={(vals) => patchTargets(vals.map(Number))}
+      placeholder={
+        inferredHostId || !showHostFirst
           ? isStack
-            ? "— pick a stack —"
-            : "— pick a target —"
-          : "— pick a host first —"}
-      </option>
-      {byName(afterStack).map((t) => (
-        <option key={t.id} value={t.id}>
-          {isStack ? (t.external_id || t.name.replace(/^stack:/, "")) : t.name}
-          {!showHostFirst && t.host_name ? ` · ${t.host_name}` : ""}
-        </option>
-      ))}
-    </select>
+            ? "— pick one or more stacks —"
+            : isContainer
+              ? "— pick one or more containers —"
+              : "— pick one or more targets —"
+          : "— pick a host first —"
+      }
+      searchPlaceholder={isStack ? "Search stacks…" : isContainer ? "Search containers…" : "Search…"}
+    />
   );
 
   if (!showHostFirst && !isContainer) {
-    return targetSelect;
+    return picker;
   }
 
   return (
@@ -260,9 +265,13 @@ export function TargetField({
           value={inferredHostId ?? ""}
           onChange={(e) => {
             const host_id = e.target.value ? Number(e.target.value) : null;
-            const keep =
-              selectedTarget && host_id && selectedTarget.host_id === host_id ? selectedTarget.id : null;
-            onChange({ host_id, target_id: keep });
+            const keep = selectedTargets.filter((t) => t.host_id === host_id).map((t) => t.id);
+            onChange({
+              host_id,
+              host_ids: host_id ? [host_id] : [],
+              target_id: keep[0] ?? null,
+              target_ids: keep,
+            });
           }}
         >
           <option value="">— pick a host —</option>
@@ -286,7 +295,7 @@ export function TargetField({
           )}
         </select>
       )}
-      {targetSelect}
+      {picker}
     </div>
   );
 }

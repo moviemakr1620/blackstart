@@ -163,7 +163,9 @@ Restore: WOL the NAS → wait until DSM `:5001` answers → `restore_auto` (star
 
 ### Do I need a restore playbook?
 
-No. A `restore_auto` step can sit at the end of a shed playbook behind a "grid is back" (and, say, battery ≥ 80%) trigger. A separate restore playbook is only useful when bringing things back takes its own ordered steps first (WOL the NAS, wait for it, then start what depends on it).
+No. A `restore_auto` step can sit at the end of a shed playbook behind a "grid is back" (and, say, battery ≥ 80%) trigger. A separate restore playbook is only useful when bringing things back takes its own ordered steps first (WOL the NAS, wait for it, then start what depends on it). If Restore all already lives on the shed playbook, disable or delete the restore playbook so the same work does not run twice.
+
+A single playbook step can pick **several** containers, stacks, or Proxmox guests (checkbox dropdown). They run in order; each stop is recorded on its own so Restore all starts them individually.
 
 **What `restore_auto` undoes:** every time a step stops something, Blackstart records it against the current outage *for that UPS*. `restore_auto` starts everything recorded for that UPS's outage, newest first, no matter which shed playbook stopped it. Things that were already off before the outage are never recorded, so they stay off. Each item is restored once; a dry run leaves them pending.
 
@@ -213,6 +215,8 @@ Do not give the Proxmox token `Sys.PowerMgmt` unless a playbook will shut the no
 | **ssh** | 22 | Custom commands |
 
 ---
+
+The bottom left of the UI shows the app version and git commit. Docker images bake the commit in at build time; an LXC install reads it from the git checkout. If GitHub's `main` is ahead, it shows **Update available** (checked every 6 hours, silently skipped if you are offline).
 
 ## Updates
 

@@ -85,7 +85,9 @@ export type Trigger = {
 export type Action = {
   type?: string;
   target_id?: number | null;
+  target_ids?: number[];
   host_id?: number | null;
+  host_ids?: number[];
   message?: string;
   command?: string;
   url?: string;
@@ -94,7 +96,9 @@ export type Action = {
   node?: string;
   port?: number;
   container?: string;
+  containers?: string[];
   stack?: string;
+  stacks?: string[];
   name?: string;
   channel_id?: number | "all" | null;
 };
