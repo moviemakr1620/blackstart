@@ -42,6 +42,8 @@ class NutClient:
         writer: asyncio.StreamWriter,
         command: str,
     ) -> list[str]:
+        if "\n" in command or "\r" in command:
+            raise NutError("Refusing a NUT command containing a line break")
         writer.write((command + "\n").encode())
         await writer.drain()
         lines: list[str] = []
@@ -153,7 +155,8 @@ def _num(value: Any) -> float | None:
 def classify_status(raw: str) -> tuple[str, bool, bool]:
     """Return (status, on_battery, charging) from a NUT ups.status string."""
     tokens = set((raw or "").upper().replace(",", " ").split())
-    on_battery = "OB" in tokens
+    # FSD (forced shutdown) without OL means the UPS is about to cut power.
+    on_battery = "OB" in tokens or ("FSD" in tokens and "OL" not in tokens and "ONLINE" not in tokens)
     charging = "CHRG" in tokens or "CHARGING" in tokens
     if "LB" in tokens:
         status = "low_battery"

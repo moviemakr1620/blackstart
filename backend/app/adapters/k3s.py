@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from typing import Any
 
 from app.adapters.ssh import SshAdapter
@@ -14,8 +15,7 @@ class K3sAdapter:
         self.kubeconfig = kubeconfig
 
     def _kubectl(self, rest: str) -> str:
-        cfg = self.kubeconfig.replace("'", "'\"'\"'")
-        return f"sudo KUBECONFIG='{cfg}' kubectl {rest}"
+        return f"sudo KUBECONFIG={shlex.quote(self.kubeconfig)} kubectl {rest}"
 
     async def ping(self) -> dict[str, Any]:
         res = await self.ssh.run(self._kubectl("get nodes --no-headers | wc -l"))
@@ -62,13 +62,13 @@ class K3sAdapter:
     async def drain(self, node: str) -> dict[str, Any]:
         return await self.ssh.run(
             self._kubectl(
-                f"drain {node} --ignore-daemonsets --delete-emptydir-data --force --grace-period=30 --timeout=120s"
+                f"drain {shlex.quote(node)} --ignore-daemonsets --delete-emptydir-data --force --grace-period=30 --timeout=120s"
             ),
             timeout=150,
         )
 
     async def uncordon(self, node: str) -> dict[str, Any]:
-        return await self.ssh.run(self._kubectl(f"uncordon {node}"))
+        return await self.ssh.run(self._kubectl(f"uncordon {shlex.quote(node)}"))
 
     async def shutdown_address(self, address: str) -> dict[str, Any]:
         node_ssh = SshAdapter(
@@ -77,6 +77,7 @@ class K3sAdapter:
             username=self.ssh.username,
             password=self.ssh.password,
             key_data=self.ssh.key_data,
+            key_passphrase=self.ssh.key_passphrase,
             timeout=self.ssh.timeout,
         )
         return await node_ssh.run("sudo shutdown -h now")

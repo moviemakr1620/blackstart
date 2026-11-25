@@ -7,6 +7,14 @@ from urllib.parse import quote
 import httpx
 
 
+class PartialStackError(RuntimeError):
+    """A stack action failed part-way; `done` lists containers already handled."""
+
+    def __init__(self, message: str, done: list[str]) -> None:
+        super().__init__(message)
+        self.done = done
+
+
 class DockerAdapter:
     """Talk to the Docker Engine API over a unix socket or TCP."""
 
@@ -30,12 +38,19 @@ class DockerAdapter:
         base = self.address if self.address.startswith("http") else f"http://{self.address}"
         return httpx.AsyncClient(base_url=base, timeout=self.timeout)
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    async def _request(self, method: str, path: str, timeout: float | None = None, **kwargs: Any) -> Any:
         async with self._client() as client:
+            if timeout is not None:
+                kwargs["timeout"] = timeout
             resp = await client.request(method, path, **kwargs)
-            if resp.status_code == 204 or not resp.content:
+            # 304 = container was already in the requested state.
+            if resp.status_code in (204, 304):
                 return {}
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                detail = resp.text[:300] if resp.content else resp.reason_phrase
+                raise RuntimeError(f"Docker {resp.status_code} on {method} {path.split('?')[0]}: {detail}")
+            if not resp.content:
+                return {}
             ctype = resp.headers.get("content-type", "")
             if "json" in ctype:
                 return resp.json()
@@ -58,12 +73,17 @@ class DockerAdapter:
 
     async def container_action(self, ident: str, action: str, timeout: int = 20) -> Any:
         ident = quote(ident, safe="")
+        # Docker waits up to `timeout` seconds before killing, so the HTTP call
+        # must be allowed to take longer than that.
+        slow = float(timeout) + 30.0
         if action == "stop":
-            return await self._request("POST", f"/containers/{ident}/stop", params={"t": str(timeout)})
+            return await self._request("POST", f"/containers/{ident}/stop", params={"t": str(timeout)}, timeout=slow)
         if action == "start":
-            return await self._request("POST", f"/containers/{ident}/start")
+            return await self._request("POST", f"/containers/{ident}/start", timeout=slow)
         if action == "restart":
-            return await self._request("POST", f"/containers/{ident}/restart", params={"t": str(timeout)})
+            return await self._request(
+                "POST", f"/containers/{ident}/restart", params={"t": str(timeout)}, timeout=slow
+            )
         if action == "kill":
             return await self._request("POST", f"/containers/{ident}/kill")
         raise ValueError(f"unknown docker action {action}")
@@ -99,8 +119,14 @@ class DockerAdapter:
             if action == "start" and running:
                 names.append(f"{name}:already-running")
                 continue
-            await self.container_action(str(ident), action, timeout=timeout)
+            try:
+                await self.container_action(str(ident), action, timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                done = [n for n in names if ":" not in n]
+                raise PartialStackError(f"{action} {name} failed: {exc}", done) from exc
             names.append(name)
+        if not containers:
+            raise RuntimeError(f"No containers found for compose project '{project}'")
         return names
 
     async def discover(self) -> list[dict[str, Any]]:

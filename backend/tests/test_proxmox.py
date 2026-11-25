@@ -107,3 +107,44 @@ def test_discover_keeps_lxc_when_qemu_forbidden_and_parses_id():
     assert {g["external_id"] for g in lxcs} == {"101", "102", "103"}
     assert adapter.warnings
     assert any("qemu" in w.lower() or "403" in w for w in adapter.warnings)
+
+
+def test_wait_task_raises_on_failed_task():
+    import pytest
+
+    adapter = ProxmoxAdapter("192.0.2.10", token_id="a@pam!b", token_secret="c")
+    answers = iter([{"status": "running"}, {"status": "stopped", "exitstatus": "VM quit/powerdown failed"}])
+
+    async def fake_request(method, path, data=None, params=None):
+        return next(answers)
+
+    adapter._request = fake_request  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="failed"):
+        asyncio.run(adapter.wait_task("pve", "UPID:x", timeout=10, interval=0))
+
+
+def test_docker_stack_partial_failure_reports_what_stopped():
+    import pytest
+
+    from app.adapters.docker_host import DockerAdapter, PartialStackError
+
+    d = DockerAdapter("http://192.0.2.11:2375")
+
+    async def fake_stacks():
+        return {"media": [
+            {"Id": "a", "Names": ["/web"], "State": "running"},
+            {"Id": "b", "Names": ["/db"], "State": "running"},
+        ]}
+
+    calls = []
+
+    async def fake_action(ident, action, timeout=20):
+        calls.append(ident)
+        if ident == "a":
+            raise RuntimeError("boom")
+
+    d.stacks = fake_stacks  # type: ignore[method-assign]
+    d.container_action = fake_action  # type: ignore[method-assign]
+    with pytest.raises(PartialStackError) as info:
+        asyncio.run(d.stack_action("media", "stop"))
+    assert info.value.done == ["db"]

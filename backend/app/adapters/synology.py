@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlencode
 
 import httpx
+
+from app.redact import redact
 
 
 class SynologyAdapter:
@@ -16,7 +17,7 @@ class SynologyAdapter:
         username: str = "",
         password: str = "",
         otp: str = "",
-        verify_tls: bool = False,
+        verify_tls: Any = True,
         use_https: bool = True,
         timeout: float = 20.0,
     ) -> None:
@@ -33,10 +34,16 @@ class SynologyAdapter:
         self._sid = ""
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.base}{path}?{urlencode(params)}"
+        """Call the DSM WebAPI with a form POST so passwords and session ids never
+        appear in URLs (and so never in proxy logs or error messages)."""
+        url = f"{self.base}{path}"
         async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
+            try:
+                resp = await client.post(url, data={k: str(v) for k, v in params.items()})
+            except httpx.HTTPError as exc:
+                raise RuntimeError(f"Synology {path}: {type(exc).__name__}: {redact(str(exc))}") from None
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Synology {path} answered HTTP {resp.status_code}")
             data = resp.json()
             if not data.get("success", True) and data.get("error"):
                 raise RuntimeError(f"Synology API error: {data.get('error')}")
@@ -61,7 +68,7 @@ class SynologyAdapter:
             data = await self._get("/webapi/auth.cgi", params)
         sid = (data.get("data") or {}).get("sid")
         if not sid:
-            raise RuntimeError(f"Synology login failed: {data}")
+            raise RuntimeError(f"Synology login failed (error {data.get('error')})")
         self._sid = sid
         return sid
 

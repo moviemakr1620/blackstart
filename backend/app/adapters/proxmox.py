@@ -34,7 +34,7 @@ class ProxmoxAdapter:
         port: int = 8006,
         token_id: str = "",
         token_secret: str = "",
-        verify_tls: bool = False,
+        verify_tls: Any = True,
         timeout: float = 15.0,
     ) -> None:
         host = address if address.startswith("http") else f"https://{address}"
@@ -104,15 +104,37 @@ class ProxmoxAdapter:
         kind: str,
         vmid: str | int,
         action: str,
+        params: dict[str, Any] | None = None,
     ) -> Any:
-        """action: start | shutdown | stop | reboot | reset"""
+        """action: start | shutdown | stop | reboot | reset. Returns the task UPID."""
         return await self._request(
             "POST",
-            f"/api2/json/nodes/{node}/{self._kind_path(kind)}/{vmid}/status/{action}",
+            f"/api2/json/nodes/{quote(str(node), safe='')}/{self._kind_path(kind)}/{quote(str(vmid), safe='')}"
+            f"/status/{action}",
+            data=params,
         )
 
+    async def wait_task(self, node: str, upid: str, timeout: float = 120, interval: float = 2.0) -> dict[str, Any]:
+        """Poll a PVE task until it stops. Raises if it fails or runs past `timeout`."""
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        path = f"/api2/json/nodes/{quote(str(node), safe='')}/tasks/{quote(upid, safe='')}/status"
+        while True:
+            data = await self._request("GET", path)
+            if isinstance(data, dict) and data.get("status") == "stopped":
+                if str(data.get("exitstatus") or "") != "OK":
+                    raise RuntimeError(f"Proxmox task failed: {data.get('exitstatus')}")
+                return data
+            if loop.time() >= deadline:
+                raise RuntimeError(f"Proxmox task still running after {int(timeout)}s ({upid})")
+            await asyncio.sleep(interval)
+
     async def shutdown_node(self, node: str) -> Any:
-        return await self._request("POST", f"/api2/json/nodes/{node}/status/shutdown")
+        return await self._request(
+            "POST", f"/api2/json/nodes/{quote(str(node), safe='')}/status", data={"command": "shutdown"}
+        )
 
     def _vmid(self, row: dict[str, Any]) -> str:
         v = row.get("vmid")

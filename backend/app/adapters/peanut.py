@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from urllib.parse import quote
+
 import httpx
 
 from app.adapters.nut import snapshot_from_vars
@@ -64,7 +66,7 @@ class PeanutClient:
         return []
 
     async def device(self, name: str) -> dict[str, Any]:
-        data = await self._get(f"/api/v1/devices/{name}?meta=true")
+        data = await self._get(f"/api/v1/devices/{quote(name, safe='')}?meta=true")
         return data if isinstance(data, dict) else {}
 
     def _device_id(self, raw: dict[str, Any], fallback: str) -> str:
@@ -89,19 +91,42 @@ class PeanutClient:
             devices = await self.devices()
             if not devices:
                 raise RuntimeError("PeaNUT returned no UPS devices. Check the NUT server inside PeaNUT.")
+            warning = ""
             if chosen:
                 lower = chosen.lower()
-                raw = next(
+                match = next(
                     (
                         d
                         for d in devices
                         if lower in self._device_id(d, "").lower() or lower in str(d.get("device.model", "")).lower()
                     ),
-                    devices[0],
+                    None,
                 )
+                if match is None:
+                    if len(devices) > 1:
+                        names = ", ".join(self._device_id(d, "?") for d in devices)
+                        raise RuntimeError(
+                            f"PeaNUT has no UPS called '{chosen}'. Available: {names}. "
+                            "Fix the device name on this UPS source."
+                        )
+                    # Only one UPS exists, so it must be the right one; say so.
+                    match = devices[0]
+                    warning = (
+                        f"No UPS named '{chosen}'; using the only one PeaNUT has "
+                        f"('{self._device_id(match, '?')}'). Update the device name to silence this."
+                    )
+                raw = match
             else:
+                if len(devices) > 1:
+                    names = ", ".join(self._device_id(d, "?") for d in devices)
+                    raise RuntimeError(f"PeaNUT has several UPSes ({names}). Set the device name on this source.")
                 raw = devices[0]
             chosen = self._device_id(raw, chosen)
+            snap = snapshot_from_vars(raw)
+            snap["device"] = chosen or snap.get("device") or ""
+            if warning:
+                snap["warning"] = warning
+            return snap
         snap = snapshot_from_vars(raw)
         snap["device"] = chosen or snap.get("device") or ""
         return snap

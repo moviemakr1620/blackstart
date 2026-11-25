@@ -16,7 +16,7 @@ class PbsAdapter:
         port: int = 8007,
         token_id: str = "",
         token_secret: str = "",
-        verify_tls: bool = False,
+        verify_tls: Any = True,
         timeout: float = 20.0,
     ) -> None:
         if address.startswith("http"):

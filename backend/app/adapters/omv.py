@@ -16,7 +16,7 @@ class OmvAdapter:
         port: int = 443,
         username: str = "",
         password: str = "",
-        verify_tls: bool = False,
+        verify_tls: Any = True,
         use_https: bool = True,
         timeout: float = 15.0,
         ssh: SshAdapter | None = None,
